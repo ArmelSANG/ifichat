@@ -18,7 +18,7 @@ export function useAuth() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (_event, session) => {
         if (session?.user) {
           setUser(session.user);
           await loadOrCreateClient(session.user);
@@ -35,7 +35,7 @@ export function useAuth() {
 
   async function loadOrCreateClient(authUser) {
     try {
-      // 1. Check if client exists
+      // 1. Try to find existing client
       const { data: existing } = await supabase
         .from('clients')
         .select('*')
@@ -48,66 +48,45 @@ export function useAuth() {
         return;
       }
 
-      // 2. Create client directly
+      // 2. Create via edge function (uses service_role, no RLS issues)
       const meta = authUser.user_metadata || {};
-      const email = authUser.email || meta.email || '';
+      const email = authUser.email || '';
       const name = meta.full_name || meta.name || email.split('@')[0] || 'Utilisateur';
       const avatar = meta.avatar_url || meta.picture || '';
-      const isAdmin = email === ADMIN_EMAIL;
 
-      const { data: newClient, error: insertErr } = await supabase
-        .from('clients')
-        .insert({
-          google_id: authUser.id,
-          email: email,
-          name: name,
-          avatar_url: avatar,
-          is_admin: isAdmin,
-        })
-        .select('*')
-        .single();
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
 
-      if (newClient) {
-        setClient(newClient);
-        setLoading(false);
-        return;
+      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/auth-callback`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          userId: authUser.id,
+          email,
+          name,
+          avatarUrl: avatar,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error('auth-callback failed:', res.status, await res.text());
       }
 
-      console.log('Direct insert failed:', insertErr);
-
-      // 3. Fallback: auth-callback edge function
-      try {
-        const session = await supabase.auth.getSession();
-        const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/auth-callback`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.data.session?.access_token}`,
-          },
-          body: JSON.stringify({
-            userId: authUser.id,
-            email: email,
-            name: name,
-            avatarUrl: avatar,
-          }),
-        });
-        console.log('Auth-callback status:', res.status);
-      } catch (e) {
-        console.error('Auth-callback error:', e);
-      }
-
-      // 4. Final fetch
-      const { data: finalClient } = await supabase
+      // 3. Fetch the newly created client
+      const { data: newClient } = await supabase
         .from('clients')
         .select('*')
         .eq('google_id', authUser.id)
         .maybeSingle();
 
-      if (finalClient) {
-        setClient(finalClient);
+      if (newClient) {
+        setClient(newClient);
       }
     } catch (err) {
-      console.error('Error loading client:', err);
+      console.error('loadOrCreateClient error:', err);
     } finally {
       setLoading(false);
     }
