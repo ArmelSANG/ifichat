@@ -7,7 +7,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Missing Supabase environment variables. Check .env.local');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    detectSessionInUrl: true,
+    flowType: 'implicit',
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
 
 // Helper: Get current session
 export async function getSession() {
@@ -42,6 +49,15 @@ export async function signInWithGoogle() {
 
 // Helper: Sign out
 export async function signOut() {
-  await supabase.auth.signOut();
+  try {
+    await supabase.auth.signOut();
+  } catch (e) {
+    // Clear manually if signOut fails
+    console.error('SignOut error:', e);
+  }
+  // Clear any stuck auth tokens
+  Object.keys(localStorage).forEach(key => {
+    if (key.startsWith('sb-')) localStorage.removeItem(key);
+  });
   window.location.href = '/';
 }
