@@ -107,7 +107,7 @@ export default function Landing() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 24 }}>
             {[
               { step: '01', title: 'Inscrivez-vous', desc: 'Connexion Google en un clic. Configurez votre widget (couleurs, textes, logo).', emoji: '🔐' },
-              { step: '02', title: 'Liez Telegram', desc: 'Copiez votre code de liaison et envoyez-le à notre bot @ifiChatBot.', emoji: '🔗' },
+              { step: '02', title: 'Liez Telegram', desc: 'Copiez votre code de liaison et envoyez-le à notre bot @ifiChat_Bot.', emoji: '🔗' },
               { step: '03', title: 'Ajoutez le widget', desc: 'Collez une ligne de code sur votre site. Vos visiteurs peuvent chatter en direct !', emoji: '💬' },
             ].map((item, i) => (
               <div key={i} style={{

@@ -1,40 +1,32 @@
-// ============================================
-// ifiChat — Edge Function: FedaPay Payments
-// /supabase/functions/payments/index.ts
-//
-// MODE LIVE — Pas de sandbox
-// Webhook URL unique: /payments/ifichat-webhook
-// (pour cohabiter avec ton autre webhook FedaPay)
-//
-// - POST /create-checkout → Session de paiement
-// - POST /ifichat-webhook → Webhook FedaPay dédié
-// - GET /status/:clientId → Statut abonnement
-// ============================================
-
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const FEDAPAY_SECRET_KEY = Deno.env.get("FEDAPAY_SECRET_KEY")!; // sk_live_...
+const FEDAPAY_SECRET_KEY = Deno.env.get("FEDAPAY_SECRET_KEY")!;
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
-
-// FedaPay LIVE API
-const FEDAPAY_BASE_URL = "https://api.fedapay.com/v1";
 const APP_URL = Deno.env.get("APP_URL") || "https://chat.ifiaas.com";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-const corsHeaders = {
+const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Content-Type": "application/json",
 };
 
-// ─── FedaPay API call ───────────────────────────────────────
-async function fedapay(endpoint: string, method: string, body?: any) {
-  const res = await fetch(`${FEDAPAY_BASE_URL}${endpoint}`, {
+function reply(data: any, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers: cors });
+}
+
+// ─── FedaPay API ────────────────────────────────────────────
+async function callFedaPay(endpoint: string, method: string, body?: any) {
+  const url = `https://api.fedapay.com/v1${endpoint}`;
+  console.log(`[FedaPay] ${method} ${url}`);
+  if (body) console.log("[FedaPay] Body:", JSON.stringify(body));
+
+  const res = await fetch(url, {
     method,
     headers: {
       "Authorization": `Bearer ${FEDAPAY_SECRET_KEY}`,
@@ -42,25 +34,68 @@ async function fedapay(endpoint: string, method: string, body?: any) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return res.json();
+
+  const text = await res.text();
+  console.log(`[FedaPay] Status: ${res.status}`);
+  console.log(`[FedaPay] Response: ${text}`);
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text, status: res.status };
+  }
 }
 
-// ─── Telegram notification ──────────────────────────────────
-async function notifyTelegram(chatId: number, text: string) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-  });
+// Find transaction ID from any FedaPay response format
+function extractTransactionId(result: any): number | null {
+  // Try all known FedaPay response formats
+  const paths = [
+    result?.["v1/transaction"]?.id,
+    result?.v1?.transaction?.id,
+    result?.transaction?.id,
+    result?.data?.id,
+    result?.id,
+  ];
+  for (const val of paths) {
+    if (val) return Number(val);
+  }
+  return null;
 }
 
-// ─── POST /create-checkout ──────────────────────────────────
+// Find token from any FedaPay token response format
+function extractToken(result: any): string | null {
+  const paths = [
+    result?.token,
+    result?.["v1/token"]?.token,
+    result?.v1?.token?.token,
+    result?.v1?.token,
+    result?.data?.token,
+  ];
+  for (const val of paths) {
+    if (val && typeof val === "string") return val;
+  }
+  return null;
+}
+
+function extractUrl(result: any): string | null {
+  const paths = [
+    result?.url,
+    result?.["v1/token"]?.url,
+    result?.v1?.token?.url,
+    result?.data?.url,
+  ];
+  for (const val of paths) {
+    if (val && typeof val === "string") return val;
+  }
+  return null;
+}
+
+// ─── CREATE CHECKOUT ────────────────────────────────────────
 async function createCheckout(body: any) {
   const { clientId, plan } = body;
 
   if (!clientId || !plan || !["monthly", "yearly"].includes(plan)) {
-    return new Response(JSON.stringify({ error: "clientId and plan (monthly/yearly) required" }),
-      { status: 400, headers: corsHeaders });
+    return reply({ error: "clientId and plan (monthly/yearly) required" }, 400);
   }
 
   const { data: client, error } = await supabase
@@ -70,73 +105,59 @@ async function createCheckout(body: any) {
     .single();
 
   if (error || !client) {
-    return new Response(JSON.stringify({ error: "Client not found" }),
-      { status: 404, headers: corsHeaders });
+    console.error("[Checkout] Client not found:", clientId, error);
+    return reply({ error: "Client not found" }, 404);
   }
 
   const amount = plan === "monthly" ? 600 : 6000;
   const description = plan === "monthly"
-    ? "ifiChat — Abonnement Mensuel"
-    : "ifiChat — Abonnement Annuel";
+    ? "ifiChat - Abonnement Mensuel"
+    : "ifiChat - Abonnement Annuel";
 
-  // Create FedaPay transaction (LIVE)
-  let txResult;
-  try {
-    txResult = await fedapay("/transactions", "POST", {
-      description,
-      amount,
-      currency: { iso: "XOF" },
-      callback_url: `${APP_URL}/dashboard?payment=success&plan=${plan}`,
-      cancel_url: `${APP_URL}/dashboard?payment=cancelled`,
-      customer: {
-        email: client.email,
-        firstname: client.name.split(" ")[0],
-        lastname: client.name.split(" ").slice(1).join(" ") || "-",
-      },
-      metadata: {
-        client_id: clientId,
-        plan,
-        source: "ifichat",
-      },
-    });
-  } catch (e) {
-    console.error("FedaPay fetch error:", e);
-    return new Response(JSON.stringify({ error: "FedaPay unreachable", details: String(e) }),
-      { status: 500, headers: corsHeaders });
-  }
+  console.log(`[Checkout] Creating transaction: ${amount} XOF for ${client.email}`);
 
-  console.log("FedaPay response:", JSON.stringify(txResult));
+  // Step 1: Create transaction
+  const txResult = await callFedaPay("/transactions", "POST", {
+    description,
+    amount,
+    currency: { iso: "XOF" },
+    callback_url: `${APP_URL}/dashboard?payment=success&plan=${plan}`,
+    cancel_url: `${APP_URL}/dashboard?payment=cancelled`,
+    customer: {
+      email: client.email,
+      firstname: client.name.split(" ")[0] || "Client",
+      lastname: client.name.split(" ").slice(1).join(" ") || "ifiChat",
+    },
+    metadata: {
+      client_id: clientId,
+      plan,
+      source: "ifichat",
+    },
+  });
 
-  // Handle multiple response formats from FedaPay
-  const tx = txResult?.v1?.transaction || txResult?.transaction || txResult?.data || txResult;
-  const txId = tx?.id;
-  
+  const txId = extractTransactionId(txResult);
+
   if (!txId) {
-    console.error("FedaPay transaction creation failed:", JSON.stringify(txResult));
-    return new Response(JSON.stringify({ error: "Payment creation failed", details: txResult }),
-      { status: 500, headers: corsHeaders });
+    console.error("[Checkout] Failed to extract transaction ID from:", JSON.stringify(txResult));
+    return reply({ error: "Payment creation failed", fedapay_response: txResult }, 500);
   }
 
-  // Generate payment token
-  let tokenRes;
-  try {
-    tokenRes = await fedapay(`/transactions/${txId}/token`, "POST", {});
-  } catch (e) {
-    console.error("FedaPay token error:", e);
-    return new Response(JSON.stringify({ error: "Token generation failed" }),
-      { status: 500, headers: corsHeaders });
+  console.log(`[Checkout] Transaction created: ${txId}`);
+
+  // Step 2: Get payment token
+  const tokenResult = await callFedaPay(`/transactions/${txId}/token`, "POST", {});
+
+  const token = extractToken(tokenResult);
+  const paymentUrl = extractUrl(tokenResult) || (token ? `https://process.fedapay.com/${token}` : null);
+
+  if (!paymentUrl) {
+    console.error("[Checkout] Failed to extract payment URL from:", JSON.stringify(tokenResult));
+    return reply({ error: "Payment URL generation failed", fedapay_response: tokenResult }, 500);
   }
 
-  console.log("FedaPay token response:", JSON.stringify(tokenRes));
+  console.log(`[Checkout] Payment URL: ${paymentUrl}`);
 
-  const token = tokenRes?.token || tokenRes?.v1?.token;
-  if (!token) {
-    console.error("FedaPay token generation failed:", JSON.stringify(tokenRes));
-    return new Response(JSON.stringify({ error: "Payment URL generation failed", details: tokenRes }),
-      { status: 500, headers: corsHeaders });
-  }
-
-  // Store pending subscription
+  // Step 3: Save pending subscription
   await supabase.from("subscriptions").insert({
     client_id: clientId,
     plan,
@@ -145,26 +166,21 @@ async function createCheckout(body: any) {
     amount,
   });
 
-  const paymentUrl = tokenRes.url || `https://process.fedapay.com/${token}`;
-
-  return new Response(JSON.stringify({ paymentUrl, transactionId: txId }),
-    { status: 200, headers: corsHeaders });
+  return reply({ paymentUrl, transactionId: txId });
 }
 
-// ─── POST /ifichat-webhook (FedaPay webhook dédié) ──────────
+// ─── WEBHOOK ────────────────────────────────────────────────
 async function handleWebhook(req: Request) {
   const body = await req.json();
+  console.log("[Webhook] Received:", JSON.stringify(body));
 
   const event = body.entity || body;
   const status = event.status;
   const transactionId = String(event.id || event.transaction_id || "");
   const metadata = event.metadata || {};
 
-  console.log("FedaPay webhook received:", { status, transactionId, metadata });
-
-  // Only process ifiChat transactions
   if (metadata.source !== "ifichat") {
-    console.log("Ignoring non-ifiChat transaction");
+    console.log("[Webhook] Ignoring non-ifiChat transaction");
     return new Response("OK", { status: 200 });
   }
 
@@ -173,7 +189,7 @@ async function handleWebhook(req: Request) {
     const plan = metadata.plan;
 
     if (!clientId || !plan) {
-      console.error("Missing metadata");
+      console.error("[Webhook] Missing metadata");
       return new Response("OK", { status: 200 });
     }
 
@@ -182,30 +198,18 @@ async function handleWebhook(req: Request) {
     if (plan === "monthly") expiresAt.setMonth(expiresAt.getMonth() + 1);
     else expiresAt.setFullYear(expiresAt.getFullYear() + 1);
 
-    // Deactivate previous active subscriptions
-    await supabase
-      .from("subscriptions")
-      .update({ status: "expired" })
-      .eq("client_id", clientId)
-      .eq("status", "active");
+    await supabase.from("subscriptions").update({ status: "expired" })
+      .eq("client_id", clientId).eq("status", "active");
 
-    // Activate the subscription
-    const { error } = await supabase
-      .from("subscriptions")
-      .update({
-        status: "active",
-        starts_at: now.toISOString(),
-        expires_at: expiresAt.toISOString(),
-      })
-      .eq("fedapay_transaction_id", transactionId)
-      .eq("client_id", clientId);
+    const { error } = await supabase.from("subscriptions").update({
+      status: "active",
+      starts_at: now.toISOString(),
+      expires_at: expiresAt.toISOString(),
+    }).eq("fedapay_transaction_id", transactionId).eq("client_id", clientId);
 
     if (error) {
-      // Fallback: insert new record
       await supabase.from("subscriptions").insert({
-        client_id: clientId,
-        plan,
-        status: "active",
+        client_id: clientId, plan, status: "active",
         fedapay_transaction_id: transactionId,
         amount: plan === "monthly" ? 600 : 6000,
         starts_at: now.toISOString(),
@@ -213,101 +217,75 @@ async function handleWebhook(req: Request) {
       });
     }
 
-    // Notify client on Telegram
-    const { data: client } = await supabase
-      .from("clients")
+    const { data: client } = await supabase.from("clients")
       .select("telegram_chat_id, telegram_linked, name")
-      .eq("id", clientId)
-      .single();
+      .eq("id", clientId).single();
 
     if (client?.telegram_linked && client?.telegram_chat_id) {
       const label = plan === "yearly" ? "Annuel (6 000 F)" : "Mensuel (600 F)";
-      await notifyTelegram(client.telegram_chat_id,
-        `✅ <b>Paiement confirmé !</b>\n\n` +
-        `📋 Plan: ${label}\n` +
-        `📅 Expire: ${expiresAt.toLocaleDateString("fr-FR")}\n\n` +
-        `Merci ${client.name} ! Votre ifiChat est actif.`
-      );
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: client.telegram_chat_id,
+          text: `✅ <b>Paiement confirmé !</b>\n📋 Plan: ${label}\n📅 Expire: ${expiresAt.toLocaleDateString("fr-FR")}\nMerci ${client.name} !`,
+          parse_mode: "HTML",
+        }),
+      });
     }
 
-    console.log(`✅ Subscription activated: ${clientId}, plan: ${plan}`);
+    console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}`);
   }
 
   if (status === "declined" || status === "cancelled") {
-    await supabase
-      .from("subscriptions")
-      .update({ status: "cancelled" })
+    await supabase.from("subscriptions").update({ status: "cancelled" })
       .eq("fedapay_transaction_id", transactionId);
-    console.log(`❌ Transaction ${status}: ${transactionId}`);
   }
 
   return new Response("OK", { status: 200 });
 }
 
-// ─── GET /status/:clientId ──────────────────────────────────
+// ─── STATUS ─────────────────────────────────────────────────
 async function getStatus(clientId: string) {
-  const { data: sub } = await supabase
-    .from("subscriptions")
-    .select("*")
-    .eq("client_id", clientId)
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
+  const { data: sub } = await supabase.from("subscriptions")
+    .select("*").eq("client_id", clientId).eq("status", "active")
+    .order("created_at", { ascending: false }).limit(1).single();
 
-  if (!sub) {
-    return new Response(JSON.stringify({ active: false, plan: null }),
-      { status: 200, headers: corsHeaders });
-  }
+  if (!sub) return reply({ active: false, plan: null });
 
-  const expired = sub.expires_at && new Date(sub.expires_at) < new Date();
-  if (expired) {
+  if (sub.expires_at && new Date(sub.expires_at) < new Date()) {
     await supabase.from("subscriptions").update({ status: "expired" }).eq("id", sub.id);
-    return new Response(JSON.stringify({ active: false, plan: sub.plan, expired: true }),
-      { status: 200, headers: corsHeaders });
+    return reply({ active: false, plan: sub.plan, expired: true });
   }
 
-  return new Response(JSON.stringify({
-    active: true,
-    plan: sub.plan,
-    expiresAt: sub.expires_at,
-    startsAt: sub.starts_at,
+  return reply({
+    active: true, plan: sub.plan,
+    expiresAt: sub.expires_at, startsAt: sub.starts_at,
     daysRemaining: Math.ceil((new Date(sub.expires_at).getTime() - Date.now()) / 86400000),
-  }), { status: 200, headers: corsHeaders });
+  });
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ROUTER
-// ═══════════════════════════════════════════════════════════
+// ─── ROUTER ─────────────────────────────────────────────────
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   try {
     const url = new URL(req.url);
     const path = url.pathname.replace("/payments", "");
 
-    // POST /create-checkout
     if (req.method === "POST" && path === "/create-checkout") {
       return createCheckout(await req.json());
     }
-
-    // POST /ifichat-webhook  ← URL unique pour cohabiter avec ton autre webhook
     if (req.method === "POST" && path === "/ifichat-webhook") {
       return handleWebhook(req);
     }
-
-    // GET /status/:clientId
     if (req.method === "GET" && path.startsWith("/status/")) {
       return getStatus(path.replace("/status/", ""));
     }
 
-    return new Response(JSON.stringify({ error: "Not found" }),
-      { status: 404, headers: corsHeaders });
+    return reply({ error: "Not found" }, 404);
   } catch (error) {
-    console.error("Payments error:", error);
-    return new Response(JSON.stringify({ error: "Internal error" }),
-      { status: 500, headers: corsHeaders });
+    console.error("[Payments] Error:", error);
+    return reply({ error: "Internal error", details: String(error) }, 500);
   }
 });
