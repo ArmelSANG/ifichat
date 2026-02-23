@@ -1,0 +1,443 @@
+import { useState, useEffect } from 'react';
+import { useAuth } from '../hooks/useAuth';
+import { supabase, signOut } from '../lib/supabase';
+import { SUPABASE_FUNCTIONS_URL, PLANS } from '../lib/constants';
+
+// ─── Icons ──────────────────────────────────────────────────
+const Icon = {
+  msg: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+  code: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>,
+  palette: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="0.5" fill="currentColor"/><circle cx="17.5" cy="10.5" r="0.5" fill="currentColor"/><circle cx="8.5" cy="7.5" r="0.5" fill="currentColor"/><circle cx="6.5" cy="12" r="0.5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.04-.23-.29-.38-.63-.38-1.04 0-.84.68-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-5.5-4.5-9.95-10-9.95z"/></svg>,
+  telegram: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>,
+  dollar: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+  copy: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+  check: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+  logout: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+  refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>,
+};
+
+// ─── Tabs ───────────────────────────────────────────────────
+const TABS = [
+  { id: 'conversations', label: 'Conversations', icon: Icon.msg },
+  { id: 'widget', label: 'Widget', icon: Icon.palette },
+  { id: 'telegram', label: 'Telegram', icon: Icon.telegram },
+  { id: 'embed', label: 'Code', icon: Icon.code },
+  { id: 'plan', label: 'Abonnement', icon: Icon.dollar },
+];
+
+export default function Dashboard() {
+  const { user, client, setClient } = useAuth();
+  const [tab, setTab] = useState('conversations');
+  const [subscription, setSubscription] = useState(null);
+  const [conversations, setConversations] = useState([]);
+  const [widgetConfig, setWidgetConfig] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (client?.id) {
+      loadSubscription();
+      loadConversations();
+      loadWidgetConfig();
+    }
+  }, [client]);
+
+  async function loadSubscription() {
+    try {
+      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/payments/status/${client.id}`);
+      const data = await res.json();
+      setSubscription(data);
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadConversations() {
+    const { data } = await supabase
+      .from('conversations')
+      .select('*, visitors(full_name, whatsapp)')
+      .eq('client_id', client.id)
+      .order('last_message_at', { ascending: false })
+      .limit(50);
+    setConversations(data || []);
+  }
+
+  async function loadWidgetConfig() {
+    const { data } = await supabase
+      .from('widget_configs')
+      .select('*')
+      .eq('client_id', client.id)
+      .single();
+    setWidgetConfig(data);
+  }
+
+  async function saveWidgetConfig() {
+    if (!widgetConfig) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from('widget_configs')
+      .update({
+        primary_color: widgetConfig.primary_color,
+        welcome_message: widgetConfig.welcome_message,
+        placeholder_text: widgetConfig.placeholder_text,
+        position: widgetConfig.position,
+        business_name: widgetConfig.business_name,
+        business_hours: widgetConfig.business_hours,
+        away_message: widgetConfig.away_message,
+      })
+      .eq('client_id', client.id);
+
+    setSaving(false);
+    if (!error) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
+  }
+
+  async function handlePay(plan) {
+    try {
+      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/payments/create-checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: client.id, plan }),
+      });
+      const data = await res.json();
+      if (data.paymentUrl) {
+        window.location.href = data.paymentUrl;
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js" async></script>`;
+
+  // ─── Render Tabs ────────────────────────────────────────
+  function renderConversations() {
+    if (conversations.length === 0) {
+      return (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#999' }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
+          <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8, color: '#555' }}>Aucune conversation</h3>
+          <p style={{ fontSize: 14 }}>Les conversations de vos visiteurs apparaîtront ici.</p>
+          <p style={{ fontSize: 12, color: '#bbb', marginTop: 8 }}>Les messages sont conservés 3 mois • Les fichiers 1 mois</p>
+        </div>
+      );
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {conversations.map(c => (
+          <div key={c.id} style={{
+            background: '#fff', borderRadius: 14, padding: '16px 18px',
+            border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 14,
+            cursor: 'pointer', transition: 'all 0.2s',
+          }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = '#d1d5db'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = '#f0f0f0'}
+          >
+            <div style={{
+              width: 42, height: 42, borderRadius: 12,
+              background: `linear-gradient(135deg, hsl(${(c.visitor_id?.charCodeAt?.(0) || 0) * 7}, 50%, 55%), hsl(${(c.visitor_id?.charCodeAt?.(0) || 0) * 7 + 30}, 40%, 45%))`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 700, fontSize: 15, flexShrink: 0,
+            }}>{c.visitors?.full_name?.charAt(0) || '?'}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{c.visitors?.full_name || 'Visiteur'}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>{c.visitors?.whatsapp || ''}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: '#bbb' }}>
+                {c.last_message_at ? new Date(c.last_message_at).toLocaleDateString('fr-FR') : '-'}
+              </div>
+              <span style={{
+                fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
+                background: c.status === 'active' ? '#ecfdf5' : '#fef2f2',
+                color: c.status === 'active' ? '#059669' : '#dc2626',
+              }}>{c.status === 'active' ? 'Actif' : c.status === 'closed' ? 'Fermé' : 'Archivé'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderWidget() {
+    if (!widgetConfig) return <div style={{ color: '#999' }}>Chargement...</div>;
+    return (
+      <div style={{ maxWidth: 500 }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Personnaliser le widget</h3>
+        {[
+          { key: 'business_name', label: 'Nom affiché', type: 'text' },
+          { key: 'primary_color', label: 'Couleur principale', type: 'color' },
+          { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea' },
+          { key: 'placeholder_text', label: 'Placeholder du champ', type: 'text' },
+          { key: 'away_message', label: 'Message hors ligne', type: 'textarea' },
+        ].map(field => (
+          <div key={field.key} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>{field.label}</label>
+            {field.type === 'color' ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input type="color" value={widgetConfig[field.key] || '#0D9488'}
+                  onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
+                  style={{ width: 50, height: 40, border: 'none', cursor: 'pointer', borderRadius: 8 }} />
+                <input type="text" value={widgetConfig[field.key] || '#0D9488'}
+                  onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
+                  style={{ padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: '"Space Mono", monospace', width: 130 }} />
+              </div>
+            ) : field.type === 'textarea' ? (
+              <textarea value={widgetConfig[field.key] || ''} rows={3}
+                onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
+                style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: 'inherit', resize: 'vertical' }} />
+            ) : (
+              <input type="text" value={widgetConfig[field.key] || ''}
+                onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
+                style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: 'inherit' }} />
+            )}
+          </div>
+        ))}
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Position</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['bottom-right', 'bottom-left'].map(pos => (
+              <button key={pos} onClick={() => setWidgetConfig({ ...widgetConfig, position: pos })} style={{
+                padding: '10px 18px', borderRadius: 10, fontSize: 13, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.2s',
+                background: widgetConfig.position === pos ? '#0D9488' : '#fff',
+                color: widgetConfig.position === pos ? '#fff' : '#666',
+                border: `2px solid ${widgetConfig.position === pos ? '#0D9488' : '#ebebeb'}`,
+              }}>{pos === 'bottom-right' ? 'Bas droite' : 'Bas gauche'}</button>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={saveWidgetConfig} disabled={saving} style={{
+          padding: '12px 28px', borderRadius: 12, border: 'none',
+          background: saved ? '#059669' : 'linear-gradient(135deg, #0D9488, #0F766E)',
+          color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          {saving ? Icon.refresh : saved ? Icon.check : null}
+          {saving ? 'Enregistrement...' : saved ? 'Enregistré !' : 'Enregistrer'}
+        </button>
+      </div>
+    );
+  }
+
+  function renderTelegram() {
+    const code = client?.telegram_link_code;
+    const linked = client?.telegram_linked;
+    return (
+      <div style={{ maxWidth: 500 }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Liaison Telegram</h3>
+        <p style={{ color: '#999', fontSize: 14, marginBottom: 24 }}>
+          Recevez vos messages de chat directement dans Telegram et répondez en faisant Reply.
+        </p>
+        {linked ? (
+          <div style={{
+            background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '20px 24px',
+            display: 'flex', alignItems: 'center', gap: 14,
+          }}>
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: '#059669', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{Icon.check}</div>
+            <div>
+              <div style={{ fontWeight: 600, color: '#065f46' }}>Telegram connecté</div>
+              <div style={{ fontSize: 13, color: '#10b981' }}>Vous recevez les messages en temps réel</div>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{
+              background: '#f8fafc', border: '2px dashed #e2e8f0', borderRadius: 14,
+              padding: '28px 24px', textAlign: 'center', marginBottom: 20,
+            }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>Votre code de liaison</div>
+              <div style={{
+                fontSize: 28, fontWeight: 800, letterSpacing: '3px', color: '#0F172A',
+                fontFamily: '"Space Mono", monospace',
+              }}>{code || 'Chargement...'}</div>
+            </div>
+            <div style={{ fontSize: 14, color: '#666', lineHeight: 1.8 }}>
+              <strong>Instructions :</strong><br />
+              1. Ouvrez Telegram<br />
+              2. Cherchez <strong>@ifiChatBot</strong><br />
+              3. Envoyez <strong>/start</strong><br />
+              4. Collez le code ci-dessus
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderEmbed() {
+    return (
+      <div style={{ maxWidth: 600 }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Code d'intégration</h3>
+        <p style={{ color: '#999', fontSize: 14, marginBottom: 24 }}>
+          Ajoutez cette ligne juste avant <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>&lt;/body&gt;</code> dans votre site.
+        </p>
+        <div style={{
+          background: '#0F172A', borderRadius: 14, padding: '20px', position: 'relative',
+        }}>
+          <code style={{
+            color: '#e2e8f0', fontSize: 13, fontFamily: '"Space Mono", monospace',
+            wordBreak: 'break-all', lineHeight: 1.7,
+          }}>
+            <span style={{ color: '#94a3b8' }}>&lt;</span>
+            <span style={{ color: '#F472B6' }}>script</span>
+            <span style={{ color: '#94a3b8' }}> src=</span>
+            <span style={{ color: '#86EFAC' }}>"{import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/{client?.id}.js"</span>
+            <span style={{ color: '#94a3b8' }}> async&gt;&lt;/</span>
+            <span style={{ color: '#F472B6' }}>script</span>
+            <span style={{ color: '#94a3b8' }}>&gt;</span>
+          </code>
+          <button onClick={() => copyToClipboard(embedCode)} style={{
+            position: 'absolute', top: 12, right: 12,
+            background: 'rgba(255,255,255,0.1)', border: 'none',
+            color: '#fff', padding: '6px 12px', borderRadius: 8,
+            fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+          }}>
+            {copied ? Icon.check : Icon.copy} {copied ? 'Copié' : 'Copier'}
+          </button>
+        </div>
+        <div style={{ marginTop: 24, padding: 20, background: '#fefce8', border: '1px solid #fde68a', borderRadius: 12, fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
+          <strong>Rappel :</strong> les messages sont conservés <strong>3 mois</strong>, les fichiers et images <strong>1 mois</strong>. Au-delà, ils sont automatiquement supprimés.
+        </div>
+      </div>
+    );
+  }
+
+  function renderPlan() {
+    return (
+      <div style={{ maxWidth: 600 }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Votre abonnement</h3>
+        {subscription?.active ? (
+          <div style={{
+            background: 'linear-gradient(135deg, #065F46, #059669)',
+            borderRadius: 18, padding: '28px 24px', color: '#fff', marginBottom: 24,
+          }}>
+            <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Plan actif</div>
+            <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
+              {subscription.plan === 'yearly' ? 'Annuel' : subscription.plan === 'monthly' ? 'Mensuel' : 'Essai'}
+            </div>
+            <div style={{ fontSize: 14, opacity: 0.8 }}>
+              Expire le {new Date(subscription.expiresAt).toLocaleDateString('fr-FR')}
+              {subscription.daysRemaining && ` (${subscription.daysRemaining} jours restants)`}
+            </div>
+          </div>
+        ) : (
+          <div style={{
+            background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 14,
+            padding: '20px', marginBottom: 24,
+          }}>
+            <div style={{ fontWeight: 600, color: '#dc2626', marginBottom: 4 }}>
+              {subscription?.expired ? 'Abonnement expiré' : 'Aucun abonnement actif'}
+            </div>
+            <div style={{ fontSize: 13, color: '#991b1b' }}>Votre widget de chat est désactivé</div>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          {[
+            { plan: 'monthly', name: 'Mensuel', price: '600 F/mois' },
+            { plan: 'yearly', name: 'Annuel', price: '6 000 F/an', badge: '2 mois offerts' },
+          ].map(p => (
+            <div key={p.plan} style={{
+              background: '#fff', border: '2px solid #f0f0f0', borderRadius: 16, padding: '24px 20px',
+              position: 'relative',
+            }}>
+              {p.badge && (
+                <span style={{
+                  position: 'absolute', top: -10, right: 12,
+                  background: '#FBBF24', color: '#78350F', padding: '3px 10px',
+                  borderRadius: 50, fontSize: 10, fontWeight: 700,
+                }}>{p.badge}</span>
+              )}
+              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{p.name}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: '#0D9488', marginBottom: 16 }}>{p.price}</div>
+              <button onClick={() => handlePay(p.plan)} style={{
+                width: '100%', padding: '12px', borderRadius: 10, border: 'none',
+                background: 'linear-gradient(135deg, #0D9488, #0F766E)',
+                color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              }}>Payer maintenant</button>
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize: 12, color: '#999', marginTop: 16, textAlign: 'center' }}>
+          Paiement sécurisé via FedaPay — Mobile Money, carte bancaire
+        </p>
+      </div>
+    );
+  }
+
+  const tabContent = {
+    conversations: renderConversations,
+    widget: renderWidget,
+    telegram: renderTelegram,
+    embed: renderEmbed,
+    plan: renderPlan,
+  };
+
+  return (
+    <div style={{
+      fontFamily: '"DM Sans", system-ui, sans-serif',
+      background: '#F8F9FB', minHeight: '100vh',
+    }}>
+      {/* Top bar */}
+      <header style={{
+        height: 60, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(20px)',
+        borderBottom: '1px solid rgba(0,0,0,0.05)',
+        display: 'flex', alignItems: 'center', padding: '0 24px',
+        position: 'sticky', top: 0, zIndex: 100,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 30, height: 30, borderRadius: 8,
+            background: 'linear-gradient(135deg, #0D9488, #0F766E)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontWeight: 800, fontSize: 9, fontFamily: '"Space Mono", monospace',
+          }}>ifi</div>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>ifi<span style={{ color: '#0D9488' }}>Chat</span></span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 13, color: '#666' }}>{client?.name || client?.email}</span>
+          <button onClick={signOut} style={{
+            background: 'none', border: 'none', color: '#999',
+            cursor: 'pointer', display: 'flex', padding: 4,
+          }}>{Icon.logout}</button>
+        </div>
+      </header>
+
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }}>
+        {/* Tabs */}
+        <div style={{
+          display: 'flex', gap: 4, marginBottom: 24, overflowX: 'auto',
+          background: '#fff', borderRadius: 14, padding: 4, border: '1px solid #f0f0f0',
+        }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding: '10px 18px', borderRadius: 10, border: 'none',
+              background: tab === t.id ? '#0D9488' : 'transparent',
+              color: tab === t.id ? '#fff' : '#666',
+              fontSize: 13, fontWeight: tab === t.id ? 600 : 500,
+              cursor: 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: 8,
+              whiteSpace: 'nowrap', transition: 'all 0.2s',
+            }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div style={{
+          background: '#fff', borderRadius: 18, padding: '28px 24px',
+          border: '1px solid #f0f0f0', minHeight: 400,
+        }}>
+          {tabContent[tab]?.()}
+        </div>
+      </div>
+    </div>
+  );
+}
