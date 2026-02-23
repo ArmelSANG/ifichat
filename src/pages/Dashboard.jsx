@@ -98,10 +98,16 @@ export default function Dashboard() {
         body: JSON.stringify({ clientId: client.id, plan }),
       });
       const data = await res.json();
+      console.log('Payment response:', data);
       if (data.paymentUrl) {
         window.location.href = data.paymentUrl;
+      } else {
+        alert('Erreur de paiement: ' + (data.error || 'Réponse invalide'));
       }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error('Payment error:', e);
+      alert('Erreur de connexion au service de paiement');
+    }
   }
 
   function copyToClipboard(text) {
@@ -259,7 +265,7 @@ export default function Dashboard() {
             <div style={{ fontSize: 14, color: '#666', lineHeight: 1.8 }}>
               <strong>Instructions :</strong><br />
               1. Ouvrez Telegram<br />
-              2. Cherchez <strong>@ifiChatBot</strong><br />
+              2. Cherchez <strong>@ifiChat_Bot</strong><br />
               3. Envoyez <strong>/start</strong><br />
               4. Collez le code ci-dessus
             </div>

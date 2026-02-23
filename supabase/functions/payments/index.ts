@@ -80,37 +80,59 @@ async function createCheckout(body: any) {
     : "ifiChat — Abonnement Annuel";
 
   // Create FedaPay transaction (LIVE)
-  const txResult = await fedapay("/transactions", "POST", {
-    description,
-    amount,
-    currency: { iso: "XOF" },
-    callback_url: `${APP_URL}/dashboard?payment=success&plan=${plan}`,
-    cancel_url: `${APP_URL}/dashboard?payment=cancelled`,
-    customer: {
-      email: client.email,
-      firstname: client.name.split(" ")[0],
-      lastname: client.name.split(" ").slice(1).join(" ") || "-",
-    },
-    metadata: {
-      client_id: clientId,
-      plan,
-      source: "ifichat",
-    },
-  });
+  let txResult;
+  try {
+    txResult = await fedapay("/transactions", "POST", {
+      description,
+      amount,
+      currency: { iso: "XOF" },
+      callback_url: `${APP_URL}/dashboard?payment=success&plan=${plan}`,
+      cancel_url: `${APP_URL}/dashboard?payment=cancelled`,
+      customer: {
+        email: client.email,
+        firstname: client.name.split(" ")[0],
+        lastname: client.name.split(" ").slice(1).join(" ") || "-",
+      },
+      metadata: {
+        client_id: clientId,
+        plan,
+        source: "ifichat",
+      },
+    });
+  } catch (e) {
+    console.error("FedaPay fetch error:", e);
+    return new Response(JSON.stringify({ error: "FedaPay unreachable", details: String(e) }),
+      { status: 500, headers: corsHeaders });
+  }
 
-  const tx = txResult?.v1?.transaction;
-  if (!tx) {
-    console.error("FedaPay transaction creation failed:", txResult);
+  console.log("FedaPay response:", JSON.stringify(txResult));
+
+  // Handle multiple response formats from FedaPay
+  const tx = txResult?.v1?.transaction || txResult?.transaction || txResult?.data || txResult;
+  const txId = tx?.id;
+  
+  if (!txId) {
+    console.error("FedaPay transaction creation failed:", JSON.stringify(txResult));
     return new Response(JSON.stringify({ error: "Payment creation failed", details: txResult }),
       { status: 500, headers: corsHeaders });
   }
 
   // Generate payment token
-  const tokenRes = await fedapay(`/transactions/${tx.id}/token`, "POST", {});
+  let tokenRes;
+  try {
+    tokenRes = await fedapay(`/transactions/${txId}/token`, "POST", {});
+  } catch (e) {
+    console.error("FedaPay token error:", e);
+    return new Response(JSON.stringify({ error: "Token generation failed" }),
+      { status: 500, headers: corsHeaders });
+  }
 
-  if (!tokenRes?.token) {
-    console.error("FedaPay token generation failed:", tokenRes);
-    return new Response(JSON.stringify({ error: "Payment URL generation failed" }),
+  console.log("FedaPay token response:", JSON.stringify(tokenRes));
+
+  const token = tokenRes?.token || tokenRes?.v1?.token;
+  if (!token) {
+    console.error("FedaPay token generation failed:", JSON.stringify(tokenRes));
+    return new Response(JSON.stringify({ error: "Payment URL generation failed", details: tokenRes }),
       { status: 500, headers: corsHeaders });
   }
 
@@ -119,13 +141,13 @@ async function createCheckout(body: any) {
     client_id: clientId,
     plan,
     status: "pending",
-    fedapay_transaction_id: String(tx.id),
+    fedapay_transaction_id: String(txId),
     amount,
   });
 
-  const paymentUrl = tokenRes.url || `https://process.fedapay.com/${tokenRes.token}`;
+  const paymentUrl = tokenRes.url || `https://process.fedapay.com/${token}`;
 
-  return new Response(JSON.stringify({ paymentUrl, transactionId: tx.id }),
+  return new Response(JSON.stringify({ paymentUrl, transactionId: txId }),
     { status: 200, headers: corsHeaders });
 }
 
