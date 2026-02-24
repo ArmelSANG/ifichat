@@ -145,7 +145,7 @@ async function createCheckout(body: any) {
       firstname: client.name.split(" ")[0] || "Client",
       lastname: client.name.split(" ").slice(1).join(" ") || "ifiChat",
     },
-    metadata: {
+    custom_metadata: {
       client_id: clientId,
       plan,
       source: "ifichat",
@@ -194,52 +194,58 @@ async function handleWebhook(req: Request) {
   const event = body.entity || body;
   const status = event.status;
   const transactionId = String(event.id || event.transaction_id || "");
-  const metadata = event.metadata || {};
 
-  if (metadata.source !== "ifichat") {
-    console.log("[Webhook] Ignoring non-ifiChat transaction");
+  // Try to get metadata from custom_metadata OR metadata
+  const meta = event.custom_metadata || event.metadata || {};
+  
+  // Try to find subscription from our DB by transaction ID
+  const { data: pendingSub } = await supabase
+    .from("subscriptions")
+    .select("*")
+    .eq("fedapay_transaction_id", transactionId)
+    .single();
+
+  if (!pendingSub) {
+    // Check if source is ifichat from metadata
+    if (meta.source === "ifichat") {
+      console.log("[Webhook] Found ifichat metadata but no pending sub for tx:", transactionId);
+    } else {
+      console.log("[Webhook] Not our transaction, ignoring:", transactionId);
+    }
     return new Response("OK", { status: 200 });
   }
 
+  // We found our subscription - use its data
+  const clientId = pendingSub.client_id;
+  const plan = pendingSub.plan;
+
+  console.log(`[Webhook] Found subscription: client=${clientId}, plan=${plan}, status=${status}`);
+
   if (status === "approved" || status === "completed") {
-    const clientId = metadata.client_id;
-    const plan = metadata.plan;
-
-    if (!clientId || !plan) {
-      console.error("[Webhook] Missing metadata");
-      return new Response("OK", { status: 200 });
-    }
-
     const now = new Date();
     const expiresAt = new Date(now);
     if (plan === "monthly") expiresAt.setMonth(expiresAt.getMonth() + 1);
     else expiresAt.setFullYear(expiresAt.getFullYear() + 1);
 
+    // Expire old active subscriptions
     await supabase.from("subscriptions").update({ status: "expired" })
       .eq("client_id", clientId).eq("status", "active");
 
-    const { error } = await supabase.from("subscriptions").update({
+    // Activate this subscription
+    await supabase.from("subscriptions").update({
       status: "active",
       starts_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
-    }).eq("fedapay_transaction_id", transactionId).eq("client_id", clientId);
+    }).eq("id", pendingSub.id);
 
-    if (error) {
-      await supabase.from("subscriptions").insert({
-        client_id: clientId, plan, status: "active",
-        fedapay_transaction_id: transactionId,
-        amount: plan === "monthly" ? 600 : 6000,
-        starts_at: now.toISOString(),
-        expires_at: expiresAt.toISOString(),
-      });
-    }
-
+    // Notify via Telegram
     const { data: client } = await supabase.from("clients")
       .select("telegram_chat_id, telegram_linked, name")
       .eq("id", clientId).single();
 
     if (client?.telegram_linked && client?.telegram_chat_id) {
-      const label = plan === "yearly" ? "Annuel (6 000 F)" : "Mensuel (600 F)";
+      const amount = pendingSub.amount || 0;
+      const label = plan === "yearly" ? `Annuel (${amount.toLocaleString()} F)` : `Mensuel (${amount.toLocaleString()} F)`;
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -251,12 +257,13 @@ async function handleWebhook(req: Request) {
       });
     }
 
-    console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}`);
+    console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}, expires: ${expiresAt.toISOString()}`);
   }
 
   if (status === "declined" || status === "cancelled") {
     await supabase.from("subscriptions").update({ status: "cancelled" })
-      .eq("fedapay_transaction_id", transactionId);
+      .eq("id", pendingSub.id);
+    console.log(`[Webhook] Subscription cancelled: ${clientId}`);
   }
 
   return new Response("OK", { status: 200 });
