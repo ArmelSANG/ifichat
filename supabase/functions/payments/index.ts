@@ -138,8 +138,8 @@ async function createCheckout(body: any) {
     description,
     amount,
     currency: { iso: "XOF" },
-    callback_url: `${APP_URL}/dashboard?payment=success&plan=${plan}`,
-    cancel_url: `${APP_URL}/dashboard?payment=cancelled`,
+    callback_url: `${APP_URL}/payment?payment=success&plan=${plan}`,
+    cancel_url: `${APP_URL}/payment?payment=cancelled`,
     customer: {
       email: client.email,
       firstname: client.name.split(" ")[0] || "Client",
@@ -223,9 +223,31 @@ async function handleWebhook(req: Request) {
 
   if (status === "approved" || status === "completed") {
     const now = new Date();
+    
+    // Calculate remaining days from current active subscription
+    let remainingDays = 0;
+    const { data: activeSub } = await supabase
+      .from("subscriptions")
+      .select("expires_at")
+      .eq("client_id", clientId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (activeSub?.expires_at) {
+      const activeExpiry = new Date(activeSub.expires_at);
+      if (activeExpiry > now) {
+        remainingDays = Math.ceil((activeExpiry.getTime() - now.getTime()) / 86400000);
+        console.log(`[Webhook] Adding ${remainingDays} remaining days from previous subscription`);
+      }
+    }
+
+    // New expiry = now + plan duration + remaining days
     const expiresAt = new Date(now);
     if (plan === "monthly") expiresAt.setMonth(expiresAt.getMonth() + 1);
     else expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+    expiresAt.setDate(expiresAt.getDate() + remainingDays);
 
     // Expire old active subscriptions
     await supabase.from("subscriptions").update({ status: "expired" })
@@ -246,18 +268,19 @@ async function handleWebhook(req: Request) {
     if (client?.telegram_linked && client?.telegram_chat_id) {
       const amount = pendingSub.amount || 0;
       const label = plan === "yearly" ? `Annuel (${amount.toLocaleString()} F)` : `Mensuel (${amount.toLocaleString()} F)`;
+      const bonusText = remainingDays > 0 ? `\n🎁 +${remainingDays} jours reportés` : "";
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: client.telegram_chat_id,
-          text: `✅ <b>Paiement confirmé !</b>\n📋 Plan: ${label}\n📅 Expire: ${expiresAt.toLocaleDateString("fr-FR")}\nMerci ${client.name} !`,
+          text: `✅ <b>Paiement confirmé !</b>\n📋 Plan: ${label}${bonusText}\n📅 Expire: ${expiresAt.toLocaleDateString("fr-FR")}\nMerci ${client.name} !`,
           parse_mode: "HTML",
         }),
       });
     }
 
-    console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}, expires: ${expiresAt.toISOString()}`);
+    console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}, remaining: +${remainingDays}d, expires: ${expiresAt.toISOString()}`);
   }
 
   if (status === "declined" || status === "cancelled") {

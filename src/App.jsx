@@ -4,6 +4,7 @@ import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Admin from './pages/Admin';
+import PaymentProcessing from './pages/PaymentProcessing';
 
 function ProtectedRoute({ children, adminOnly = false }) {
   const { user, client, loading } = useAuth();
@@ -54,6 +55,14 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <Admin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/payment"
+          element={
+            <ProtectedRoute>
+              <PaymentProcessing />
             </ProtectedRoute>
           }
         />

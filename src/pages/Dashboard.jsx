@@ -95,6 +95,8 @@ export default function Dashboard() {
         business_name: widgetConfig.business_name,
         business_hours: widgetConfig.business_hours,
         away_message: widgetConfig.away_message,
+        bottom_offset: widgetConfig.bottom_offset || 20,
+        side_offset: widgetConfig.side_offset || 20,
       })
       .eq('client_id', client.id);
 
@@ -229,6 +231,62 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Bottom & Side offset */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Distance du bas (px)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="range" min="10" max="200" step="5"
+                value={widgetConfig.bottom_offset || 20}
+                onChange={e => setWidgetConfig({ ...widgetConfig, bottom_offset: parseInt(e.target.value) })}
+                style={{ flex: 1, accentColor: '#0D9488' }} />
+              <span style={{
+                background: '#f1f5f9', padding: '6px 10px', borderRadius: 8,
+                fontSize: 13, fontWeight: 600, color: '#334155', minWidth: 48, textAlign: 'center',
+              }}>{widgetConfig.bottom_offset || 20}</span>
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Distance du côté (px)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="range" min="10" max="200" step="5"
+                value={widgetConfig.side_offset || 20}
+                onChange={e => setWidgetConfig({ ...widgetConfig, side_offset: parseInt(e.target.value) })}
+                style={{ flex: 1, accentColor: '#0D9488' }} />
+              <span style={{
+                background: '#f1f5f9', padding: '6px 10px', borderRadius: 8,
+                fontSize: 13, fontWeight: 600, color: '#334155', minWidth: 48, textAlign: 'center',
+              }}>{widgetConfig.side_offset || 20}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div style={{
+          marginBottom: 20, border: '2px solid #f0f0f0', borderRadius: 14,
+          height: 160, position: 'relative', overflow: 'hidden', background: '#fafafa',
+        }}>
+          <div style={{ position: 'absolute', top: 8, left: 12, fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>
+            APERÇU POSITION
+          </div>
+          <div style={{
+            position: 'absolute',
+            bottom: widgetConfig.bottom_offset || 20,
+            ...(widgetConfig.position === 'bottom-left'
+              ? { left: widgetConfig.side_offset || 20 }
+              : { right: widgetConfig.side_offset || 20 }),
+            width: 52, height: 52, borderRadius: '50%',
+            background: widgetConfig.primary_color || '#0D9488',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.2)',
+            transition: 'all 0.3s ease',
+          }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+        </div>
+
         <button onClick={saveWidgetConfig} disabled={saving} style={{
           padding: '12px 28px', borderRadius: 12, border: 'none',
           background: saved ? '#059669' : 'linear-gradient(135deg, #0D9488, #0F766E)',
@@ -295,28 +353,36 @@ export default function Dashboard() {
           Ajoutez cette ligne juste avant <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>&lt;/body&gt;</code> dans votre site.
         </p>
         <div style={{
-          background: '#0F172A', borderRadius: 14, padding: '20px', position: 'relative',
+          background: '#0F172A', borderRadius: 14, padding: '16px 16px 12px', overflow: 'hidden',
         }}>
-          <code style={{
-            color: '#e2e8f0', fontSize: 13, fontFamily: '"Space Mono", monospace',
-            wordBreak: 'break-all', lineHeight: 1.7,
+          <div style={{
+            overflowX: 'auto', paddingBottom: 8,
+            WebkitOverflowScrolling: 'touch',
           }}>
-            <span style={{ color: '#94a3b8' }}>&lt;</span>
-            <span style={{ color: '#F472B6' }}>script</span>
-            <span style={{ color: '#94a3b8' }}> src=</span>
-            <span style={{ color: '#86EFAC' }}>"{import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/{client?.id}.js"</span>
-            <span style={{ color: '#94a3b8' }}> async&gt;&lt;/</span>
-            <span style={{ color: '#F472B6' }}>script</span>
-            <span style={{ color: '#94a3b8' }}>&gt;</span>
-          </code>
-          <button onClick={() => copyToClipboard(embedCode)} style={{
-            position: 'absolute', top: 12, right: 12,
-            background: 'rgba(255,255,255,0.1)', border: 'none',
-            color: '#fff', padding: '6px 12px', borderRadius: 8,
-            fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
-          }}>
-            {copied ? Icon.check : Icon.copy} {copied ? 'Copié' : 'Copier'}
-          </button>
+            <code style={{
+              color: '#e2e8f0', fontSize: 13, fontFamily: '"Space Mono", monospace',
+              lineHeight: 1.7, whiteSpace: 'nowrap', display: 'block',
+            }}>
+              <span style={{ color: '#94a3b8' }}>&lt;</span>
+              <span style={{ color: '#F472B6' }}>script</span>
+              <span style={{ color: '#94a3b8' }}> src=</span>
+              <span style={{ color: '#86EFAC' }}>"{import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/{client?.id}.js"</span>
+              <span style={{ color: '#94a3b8' }}> async&gt;&lt;/</span>
+              <span style={{ color: '#F472B6' }}>script</span>
+              <span style={{ color: '#94a3b8' }}>&gt;</span>
+            </code>
+          </div>
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+            <button onClick={() => copyToClipboard(embedCode)} style={{
+              background: copied ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.1)',
+              border: 'none', color: copied ? '#34D399' : '#fff',
+              padding: '8px 16px', borderRadius: 8,
+              fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+              transition: 'all 0.2s',
+            }}>
+              {copied ? Icon.check : Icon.copy} {copied ? 'Copié !' : 'Copier le code'}
+            </button>
+          </div>
         </div>
         <div style={{ marginTop: 24, padding: 20, background: '#fefce8', border: '1px solid #fde68a', borderRadius: 12, fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
           <strong>Rappel :</strong> les messages sont conservés <strong>3 mois</strong>, les fichiers et images <strong>1 mois</strong>. Au-delà, ils sont automatiquement supprimés.
