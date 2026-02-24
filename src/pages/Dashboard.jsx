@@ -93,12 +93,34 @@ export default function Dashboard() {
   };
 
   async function loadWidgetConfig() {
-    const { data } = await supabase
-      .from('widget_configs')
-      .select('*')
-      .eq('client_id', client.id)
-      .single();
-    setWidgetConfig({ ...widgetDefaults, ...(data || {}) });
+    try {
+      // Use widget-save endpoint with GET-like approach, or direct read
+      const { data } = await supabase
+        .from('widget_configs')
+        .select('*')
+        .eq('client_id', client.id)
+        .single();
+      
+      if (data) {
+        setWidgetConfig({ ...widgetDefaults, ...data });
+        return;
+      }
+    } catch (e) {}
+
+    // Fallback: try API (bypasses RLS)
+    try {
+      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/widget-api/config/${client.id}`);
+      if (res.ok) {
+        const result = await res.json();
+        if (result?.config) {
+          setWidgetConfig({ ...widgetDefaults, ...result.config });
+          return;
+        }
+      }
+    } catch (e) {}
+
+    // Default values
+    setWidgetConfig({ ...widgetDefaults });
   }
 
   async function loadDynPlans() {
@@ -129,26 +151,47 @@ export default function Dashboard() {
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
+  const [toast, setToast] = useState(null);
+
+  function showToast(msg, type = 'success') {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  }
+
   async function saveWidgetConfig() {
     if (!widgetConfig) return;
     setSaving(true);
-    const { error } = await supabase
-      .from('widget_configs')
-      .update({
-        primary_color: widgetConfig.primary_color,
-        welcome_message: widgetConfig.welcome_message,
-        placeholder_text: widgetConfig.placeholder_text,
-        position: widgetConfig.position,
-        business_name: widgetConfig.business_name,
-        business_hours: widgetConfig.business_hours,
-        away_message: widgetConfig.away_message,
-        bottom_offset: widgetConfig.bottom_offset || 20,
-        side_offset: widgetConfig.side_offset || 20,
-      })
-      .eq('client_id', client.id);
+    
+    const payload = {
+      primary_color: widgetConfig.primary_color,
+      welcome_message: widgetConfig.welcome_message,
+      placeholder_text: widgetConfig.placeholder_text,
+      position: widgetConfig.position,
+      business_name: widgetConfig.business_name,
+      business_hours: widgetConfig.business_hours,
+      away_message: widgetConfig.away_message,
+      bottom_offset: widgetConfig.bottom_offset || 20,
+      side_offset: widgetConfig.side_offset || 20,
+    };
 
+    try {
+      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/widget-save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: client.id, config: payload }),
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        showToast('Widget sauvegardé avec succès !', 'success');
+      } else {
+        console.error('Save error:', result);
+        showToast('Erreur : ' + (result.error || result.details || 'Réessayez'), 'error');
+      }
+    } catch (e) {
+      console.error('Network error:', e);
+      showToast('Erreur réseau. Vérifiez votre connexion.', 'error');
+    }
     setSaving(false);
-    if (!error) { setSaved(true); setTimeout(() => setSaved(false), 2000); }
   }
 
   async function handlePay(plan) {
@@ -237,114 +280,114 @@ export default function Dashboard() {
           { key: 'business_name', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
           { key: 'primary_color', label: 'Couleur principale', type: 'color', placeholder: '' },
           { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea', placeholder: 'Ex: Bonjour ! 👋 Comment pouvons-nous vous aider aujourd\'hui ?' },
-          { key: 'placeholder_text', label: 'Texte dans le champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },
-          { key: 'away_message', label: 'Message quand vous êtes absent', type: 'textarea', placeholder: 'Ex: Nous sommes hors ligne. Laissez votre message, on vous répond vite !' },
+          { key: 'placeholder_text', label: 'Texte champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },
+          { key: 'away_message', label: 'Message absent', type: 'textarea', placeholder: 'Ex: Nous sommes hors ligne. Laissez votre message !' },
         ].map(field => (
-          <div key={field.key} style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>{field.label}</label>
+          <div key={field.key} style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 5 }}>{field.label}</label>
             {field.type === 'color' ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <input type="color" value={widgetConfig[field.key] || '#0D9488'}
                   onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
-                  style={{ width: 50, height: 40, border: 'none', cursor: 'pointer', borderRadius: 8 }} />
+                  style={{ width: 44, height: 38, border: 'none', cursor: 'pointer', borderRadius: 8, padding: 0 }} />
                 <input type="text" value={widgetConfig[field.key] || '#0D9488'}
                   onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
                   placeholder="#0D9488"
-                  style={{ padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: '"Space Mono", monospace', width: 130 }} />
+                  style={{ padding: '9px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontFamily: '"Space Mono", monospace', width: 120, boxSizing: 'border-box' }} />
               </div>
             ) : field.type === 'textarea' ? (
-              <textarea value={widgetConfig[field.key] || ''} rows={3}
+              <textarea value={widgetConfig[field.key] || ''} rows={2}
                 onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
                 placeholder={field.placeholder}
-                style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: 'inherit', resize: 'vertical' }} />
+                style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
             ) : (
               <input type="text" value={widgetConfig[field.key] || ''}
                 onChange={e => setWidgetConfig({ ...widgetConfig, [field.key]: e.target.value })}
                 placeholder={field.placeholder}
-                style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '2px solid #ebebeb', fontSize: 14, fontFamily: 'inherit' }} />
+                style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }} />
             )}
           </div>
         ))}
 
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Position</label>
-          <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 5 }}>Position</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {['bottom-right', 'bottom-left'].map(pos => (
               <button key={pos} onClick={() => setWidgetConfig({ ...widgetConfig, position: pos })} style={{
-                padding: '10px 18px', borderRadius: 10, fontSize: 13, fontWeight: 500,
+                padding: '9px 16px', borderRadius: 10, fontSize: 13, fontWeight: 500,
                 cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.2s',
                 background: widgetConfig.position === pos ? '#0D9488' : '#fff',
                 color: widgetConfig.position === pos ? '#fff' : '#666',
-                border: `2px solid ${widgetConfig.position === pos ? '#0D9488' : '#ebebeb'}`,
+                border: `1.5px solid ${widgetConfig.position === pos ? '#0D9488' : '#e2e8f0'}`,
               }}>{pos === 'bottom-right' ? 'Bas droite' : 'Bas gauche'}</button>
             ))}
           </div>
         </div>
 
-        {/* Bottom & Side offset */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+        {/* Offsets - stacks on mobile */}
+        <div className="dash-widget-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
           <div>
-            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Distance du bas (px)</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 5 }}>Distance bas (px)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="range" min="10" max="200" step="5"
                 value={widgetConfig.bottom_offset || 20}
                 onChange={e => setWidgetConfig({ ...widgetConfig, bottom_offset: parseInt(e.target.value) })}
                 style={{ flex: 1, accentColor: '#0D9488' }} />
               <span style={{
-                background: '#f1f5f9', padding: '6px 10px', borderRadius: 8,
-                fontSize: 13, fontWeight: 600, color: '#334155', minWidth: 48, textAlign: 'center',
+                background: '#f1f5f9', padding: '4px 8px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, color: '#334155', minWidth: 36, textAlign: 'center',
               }}>{widgetConfig.bottom_offset || 20}</span>
             </div>
           </div>
           <div>
-            <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>Distance du côté (px)</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 5 }}>Distance côté (px)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="range" min="10" max="200" step="5"
                 value={widgetConfig.side_offset || 20}
                 onChange={e => setWidgetConfig({ ...widgetConfig, side_offset: parseInt(e.target.value) })}
                 style={{ flex: 1, accentColor: '#0D9488' }} />
               <span style={{
-                background: '#f1f5f9', padding: '6px 10px', borderRadius: 8,
-                fontSize: 13, fontWeight: 600, color: '#334155', minWidth: 48, textAlign: 'center',
+                background: '#f1f5f9', padding: '4px 8px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, color: '#334155', minWidth: 36, textAlign: 'center',
               }}>{widgetConfig.side_offset || 20}</span>
             </div>
           </div>
         </div>
 
-        {/* Preview */}
+        {/* Preview - compact */}
         <div style={{
-          marginBottom: 20, border: '2px solid #f0f0f0', borderRadius: 14,
-          height: 160, position: 'relative', overflow: 'hidden', background: '#fafafa',
+          marginBottom: 16, border: '1.5px solid #f0f0f0', borderRadius: 12,
+          height: 120, position: 'relative', overflow: 'hidden', background: '#fafafa',
         }}>
-          <div style={{ position: 'absolute', top: 8, left: 12, fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>
-            APERÇU POSITION
+          <div style={{ position: 'absolute', top: 6, left: 10, fontSize: 9, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Aperçu
           </div>
           <div style={{
             position: 'absolute',
-            bottom: widgetConfig.bottom_offset || 20,
+            bottom: Math.min(widgetConfig.bottom_offset || 20, 50),
             ...(widgetConfig.position === 'bottom-left'
-              ? { left: widgetConfig.side_offset || 20 }
-              : { right: widgetConfig.side_offset || 20 }),
-            width: 52, height: 52, borderRadius: '50%',
+              ? { left: Math.min(widgetConfig.side_offset || 20, 50) }
+              : { right: Math.min(widgetConfig.side_offset || 20, 50) }),
+            width: 44, height: 44, borderRadius: '50%',
             background: widgetConfig.primary_color || '#0D9488',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 4px 15px rgba(0,0,0,0.2)',
+            boxShadow: '0 3px 12px rgba(0,0,0,0.2)',
             transition: 'all 0.3s ease',
           }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
           </div>
         </div>
 
         <button onClick={saveWidgetConfig} disabled={saving} style={{
-          padding: '12px 28px', borderRadius: 12, border: 'none',
-          background: saved ? '#059669' : 'linear-gradient(135deg, #0D9488, #0F766E)',
+          padding: '11px 24px', borderRadius: 12, border: 'none',
+          background: 'linear-gradient(135deg, #0D9488, #0F766E)',
           color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          display: 'flex', alignItems: 'center', gap: 8,
+          display: 'flex', alignItems: 'center', gap: 8, opacity: saving ? 0.7 : 1,
         }}>
-          {saving ? Icon.refresh : saved ? Icon.check : null}
-          {saving ? 'Enregistrement...' : saved ? 'Enregistré !' : 'Enregistrer'}
+          {saving ? Icon.refresh : null}
+          {saving ? 'Enregistrement...' : 'Enregistrer'}
         </button>
       </div>
     );
@@ -644,16 +687,35 @@ add dst-host=fonts.gstatic.com comment="ifiChat Fonts"`;
       background: '#F8F9FB', minHeight: '100vh',
     }}>
       <style>{`
+        * { box-sizing: border-box; }
         @media (max-width: 640px) {
           .dash-header { padding: 0 12px !important; }
-          .dash-content { padding: 12px !important; }
+          .dash-content { padding: 10px !important; }
+          .dash-card { padding: 18px 14px !important; }
           .dash-tabs button { padding: 8px 12px !important; font-size: 12px !important; }
           .dash-tabs button svg { display: none; }
           .dash-plan-grid { grid-template-columns: 1fr !important; }
           .dash-widget-grid { grid-template-columns: 1fr !important; }
           .dash-embed-code { font-size: 11px !important; word-break: break-all; }
         }
+        @keyframes toastIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
       `}</style>
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, animation: 'toastIn 0.3s ease',
+          background: toast.type === 'success' ? '#059669' : '#DC2626',
+          color: '#fff', padding: '12px 24px', borderRadius: 12,
+          fontSize: 14, fontWeight: 600, boxShadow: '0 8px 30px rgba(0,0,0,0.18)',
+          display: 'flex', alignItems: 'center', gap: 8,
+          maxWidth: 'calc(100vw - 32px)',
+        }}>
+          {toast.type === 'success' ? '✓' : '✕'} {toast.msg}
+        </div>
+      )}
 
       {/* Top bar */}
       <header className="dash-header" style={{
@@ -772,9 +834,9 @@ add dst-host=fonts.gstatic.com comment="ifiChat Fonts"`;
         </div>
 
         {/* Content */}
-        <div style={{
+        <div className="dash-card" style={{
           background: '#fff', borderRadius: 18, padding: '28px 24px',
-          border: '1px solid #f0f0f0', minHeight: 400,
+          border: '1px solid #f0f0f0', minHeight: 300,
         }}>
           {tabContent[tab]?.()}
         </div>

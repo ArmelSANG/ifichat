@@ -461,6 +461,29 @@ serve(async (req) => {
       return getWidgetConfig(cid);
     }
 
+    // GET /messages/:conversationId
+    if (req.method === "GET" && path.startsWith("/messages/")) {
+      const convId = path.replace("/messages/", "");
+      const { data: messages, error } = await supabase
+        .from("messages")
+        .select("id, content, sender, content_type, file_url, file_name, created_at")
+        .eq("conversation_id", convId)
+        .order("created_at", { ascending: true })
+        .limit(100);
+
+      if (error) {
+        return new Response(
+          JSON.stringify({ error: "Failed to load messages" }),
+          { status: 500, headers: corsHeaders }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ messages: messages || [] }),
+        { status: 200, headers: corsHeaders }
+      );
+    }
+
     if (!clientId) {
       return new Response(
         JSON.stringify({ error: "Client ID required" }),
