@@ -10,6 +10,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { sendEmail, addNotification, emailTemplates } from "../_shared/notifications.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -121,6 +122,21 @@ async function expireSubscriptions() {
 
   if (!expiredSubs?.length) return { subscriptionsExpired: 0 };
 
+  // Get dynamic prices
+  let monthlyPrice = 600;
+  let yearlyPrice = 6000;
+  try {
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "plans")
+      .single();
+    if (settings?.value) {
+      monthlyPrice = settings.value.monthly?.price || 600;
+      yearlyPrice = settings.value.yearly?.price || 6000;
+    }
+  } catch (e) { /* defaults */ }
+
   let expired = 0;
 
   for (const sub of expiredSubs) {
@@ -128,60 +144,179 @@ async function expireSubscriptions() {
 
     const { data: client } = await supabase
       .from("clients")
-      .select("telegram_chat_id, telegram_linked, name")
+      .select("telegram_chat_id, telegram_linked, name, email")
       .eq("id", sub.client_id)
       .single();
 
+    const planLabel = sub.plan === "yearly" ? "annuel" : sub.plan === "monthly" ? "mensuel" : "d'essai";
+
+    // Dashboard
+    await addNotification(
+      sub.client_id, "expired",
+      "⚠️ Abonnement expiré",
+      `Votre plan ${planLabel} a expiré. Votre widget est désactivé. Renouvelez pour continuer.`,
+      "/dashboard"
+    );
+
+    // Email
+    if (client?.email) {
+      const eml = emailTemplates.expired(client.name || "Client", planLabel, monthlyPrice, yearlyPrice);
+      await sendEmail(client.email, eml.subject, eml.body);
+    }
+
+    // Telegram
     if (client?.telegram_linked && client?.telegram_chat_id) {
-      const planLabel = sub.plan === "yearly" ? "annuel" : sub.plan === "monthly" ? "mensuel" : "d'essai";
       await notifyTelegram(client.telegram_chat_id,
         `⚠️ <b>Abonnement expiré</b>\n\n` +
         `${client.name}, votre plan ${planLabel} ifiChat a expiré.\n` +
-        `Votre widget est désactivé.\n\n` +
-        `👉 Renouvelez : https://chat.ifiaas.com/dashboard\n` +
-        `Mensuel: 600 F | Annuel: 6 000 F`
+        `❌ Votre widget est désactivé.\n\n` +
+        `Renouvelez maintenant :\n` +
+        `📅 Mensuel: ${monthlyPrice.toLocaleString()} FCFA\n` +
+        `🏆 Annuel: ${yearlyPrice.toLocaleString()} FCFA\n\n` +
+        `👉 https://chat.ifiaas.com/dashboard`
       );
     }
+
+    // Notify admin too
+    try {
+      const { data: admin } = await supabase
+        .from("clients")
+        .select("telegram_chat_id, telegram_linked")
+        .eq("is_admin", true)
+        .eq("telegram_linked", true)
+        .limit(1)
+        .single();
+
+      if (admin?.telegram_chat_id) {
+        await notifyTelegram(admin.telegram_chat_id,
+          `📉 <b>Abonnement expiré</b>\n👤 ${client?.name || "Client"}\n📋 Plan: ${sub.plan}`
+        );
+      }
+    } catch (e) { /* skip */ }
+
     expired++;
   }
 
   return { subscriptionsExpired: expired };
 }
 
-// ─── TASK 4: Trial expiry reminders (J-2) ───────────────────
-async function sendTrialReminders() {
-  const twoDays = new Date(); twoDays.setDate(twoDays.getDate() + 2);
-  const oneDay = new Date(); oneDay.setDate(oneDay.getDate() + 1);
+// ─── TASK 4: Subscription expiry reminders (J-3 and J-1) ────
+async function sendExpiryReminders() {
+  // Get dynamic prices
+  let monthlyPrice = 600;
+  let yearlyPrice = 6000;
+  try {
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "plans")
+      .single();
+    if (settings?.value) {
+      monthlyPrice = settings.value.monthly?.price || 600;
+      yearlyPrice = settings.value.yearly?.price || 6000;
+    }
+  } catch (e) { /* defaults */ }
 
-  const { data: expiringSubs } = await supabase
+  const now = new Date();
+  const threeDays = new Date(now); threeDays.setDate(threeDays.getDate() + 3);
+  const twoDays = new Date(now); twoDays.setDate(twoDays.getDate() + 2);
+  const oneDay = new Date(now); oneDay.setDate(oneDay.getDate() + 1);
+
+  // J-3 reminders: expires between 2 and 3 days from now
+  const { data: j3Subs } = await supabase
     .from("subscriptions")
-    .select("id, client_id")
+    .select("id, client_id, plan")
     .eq("status", "active")
-    .eq("plan", "trial")
-    .gt("expires_at", oneDay.toISOString())
-    .lt("expires_at", twoDays.toISOString());
+    .gt("expires_at", twoDays.toISOString())
+    .lt("expires_at", threeDays.toISOString());
 
-  if (!expiringSubs?.length) return { remindersSent: 0 };
+  // J-1 reminders: expires between now and 1 day from now (urgent)
+  const { data: j1Subs } = await supabase
+    .from("subscriptions")
+    .select("id, client_id, plan")
+    .eq("status", "active")
+    .gt("expires_at", now.toISOString())
+    .lt("expires_at", oneDay.toISOString());
 
   let sent = 0;
-  for (const sub of expiringSubs) {
+
+  // Send J-3
+  for (const sub of (j3Subs || [])) {
     const { data: client } = await supabase
       .from("clients")
-      .select("telegram_chat_id, telegram_linked, name")
+      .select("telegram_chat_id, telegram_linked, name, email")
       .eq("id", sub.client_id)
       .single();
 
+    const planLabel = sub.plan === "yearly" ? "annuel" : sub.plan === "monthly" ? "mensuel" : "d'essai";
+
+    // Dashboard
+    await addNotification(
+      sub.client_id, "expiry_warning",
+      "⏰ Abonnement expire dans 3 jours",
+      `Votre plan ${planLabel} expire bientôt. Renouvelez pour garder votre chat actif.`,
+      "/dashboard"
+    );
+
+    // Email
+    if (client?.email) {
+      const eml = emailTemplates.expiryWarning(client.name || "Client", 3, planLabel, monthlyPrice, yearlyPrice);
+      await sendEmail(client.email, eml.subject, eml.body);
+    }
+
+    // Telegram
     if (client?.telegram_linked && client?.telegram_chat_id) {
       await notifyTelegram(client.telegram_chat_id,
-        `⏰ <b>Essai gratuit expire dans 2 jours !</b>\n\n` +
-        `${client.name}, passez à un plan payant pour continuer :\n` +
-        `💳 Mensuel: 600 FCFA\n` +
-        `💳 Annuel: 6 000 FCFA (2 mois offerts)\n\n` +
+        `⏰ <b>Abonnement expire dans 3 jours</b>\n\n` +
+        `${client.name}, votre plan ${planLabel} arrive à expiration.\n\n` +
+        `Renouvelez pour garder votre chat actif :\n` +
+        `📅 Mensuel: ${monthlyPrice.toLocaleString()} FCFA\n` +
+        `🏆 Annuel: ${yearlyPrice.toLocaleString()} FCFA\n\n` +
         `👉 https://chat.ifiaas.com/dashboard`
       );
-      sent++;
     }
+    sent++;
   }
+
+  // Send J-1 (urgent)
+  for (const sub of (j1Subs || [])) {
+    const { data: client } = await supabase
+      .from("clients")
+      .select("telegram_chat_id, telegram_linked, name, email")
+      .eq("id", sub.client_id)
+      .single();
+
+    const planLabel = sub.plan === "yearly" ? "annuel" : sub.plan === "monthly" ? "mensuel" : "d'essai";
+
+    // Dashboard
+    await addNotification(
+      sub.client_id, "expiry_warning",
+      "🚨 Abonnement expire DEMAIN !",
+      `Votre plan ${planLabel} expire dans moins de 24h. Votre widget sera désactivé.`,
+      "/dashboard"
+    );
+
+    // Email
+    if (client?.email) {
+      const eml = emailTemplates.expiryWarning(client.name || "Client", 1, planLabel, monthlyPrice, yearlyPrice);
+      await sendEmail(client.email, eml.subject, eml.body);
+    }
+
+    // Telegram
+    if (client?.telegram_linked && client?.telegram_chat_id) {
+      await notifyTelegram(client.telegram_chat_id,
+        `🚨 <b>URGENT — Abonnement expire DEMAIN !</b>\n\n` +
+        `${client.name}, votre plan ${planLabel} expire dans moins de 24h.\n` +
+        `⚠️ Votre widget sera désactivé à l'expiration.\n\n` +
+        `Renouvelez maintenant :\n` +
+        `📅 Mensuel: ${monthlyPrice.toLocaleString()} FCFA\n` +
+        `🏆 Annuel: ${yearlyPrice.toLocaleString()} FCFA\n\n` +
+        `👉 https://chat.ifiaas.com/dashboard`
+      );
+    }
+    sent++;
+  }
+
   return { remindersSent: sent };
 }
 
@@ -220,7 +355,7 @@ serve(async (req) => {
       cleanExpiredFiles(),
       cleanExpiredMessages(),
       expireSubscriptions(),
-      sendTrialReminders(),
+      sendExpiryReminders(),
       archiveOldConversations(),
     ]);
 

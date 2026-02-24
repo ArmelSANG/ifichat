@@ -5,12 +5,37 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { sendEmail, addNotification, emailTemplates } from "../_shared/notifications.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ADMIN_EMAIL = Deno.env.get("ADMIN_EMAIL") || "admin@ifiaas.com";
+const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+async function notifyAdmin(text: string) {
+  try {
+    // Find admin's telegram chat_id
+    const { data: admin } = await supabase
+      .from("clients")
+      .select("telegram_chat_id, telegram_linked")
+      .eq("is_admin", true)
+      .eq("telegram_linked", true)
+      .limit(1)
+      .single();
+
+    if (admin?.telegram_chat_id) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: admin.telegram_chat_id, text, parse_mode: "HTML" }),
+      });
+    }
+  } catch (e) {
+    console.error("Admin notification error:", e);
+  }
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -147,6 +172,28 @@ serve(async (req) => {
       });
       if (subError) console.error("Trial error:", subError);
     }
+
+    // Notify admin of new signup
+    await notifyAdmin(
+      `🆕 <b>Nouveau client inscrit !</b>\n\n` +
+      `👤 ${name || email.split("@")[0]}\n` +
+      `📧 ${email}\n` +
+      `📋 Essai gratuit 7 jours\n` +
+      `🔗 Code Telegram: ${linkCode}\n` +
+      `📅 ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`
+    );
+
+    // Dashboard notification
+    await addNotification(
+      newClient.id, "welcome",
+      "Bienvenue sur ifiChat ! 🚀",
+      "Votre compte est créé avec 7 jours d'essai gratuit. Configurez votre widget et liez Telegram pour commencer.",
+      "/dashboard"
+    );
+
+    // Welcome email
+    const welcomeEmail = emailTemplates.welcome(name || email.split("@")[0]);
+    await sendEmail(email, welcomeEmail.subject, welcomeEmail.body);
 
     return new Response(
       JSON.stringify({

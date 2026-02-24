@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { sendEmail, addNotification, emailTemplates } from "../_shared/notifications.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -262,7 +263,7 @@ async function handleWebhook(req: Request) {
 
     // Notify via Telegram
     const { data: client } = await supabase.from("clients")
-      .select("telegram_chat_id, telegram_linked, name")
+      .select("telegram_chat_id, telegram_linked, name, email")
       .eq("id", clientId).single();
 
     if (client?.telegram_linked && client?.telegram_chat_id) {
@@ -280,7 +281,54 @@ async function handleWebhook(req: Request) {
       });
     }
 
+    // Dashboard notification
+    const planLabel = plan === "yearly" ? "Annuel" : "Mensuel";
+    await addNotification(
+      clientId, "payment",
+      `Paiement confirmé — Plan ${planLabel} ✅`,
+      `Votre plan ${planLabel} est actif jusqu'au ${expiresAt.toLocaleDateString("fr-FR")}${remainingDays > 0 ? `. +${remainingDays} jours reportés !` : ""}`,
+      "/dashboard"
+    );
+
+    // Email notification
+    if (client?.email) {
+      const payEmail = emailTemplates.paymentConfirmed(
+        client.name || "Client",
+        planLabel,
+        pendingSub.amount || 0,
+        expiresAt.toLocaleDateString("fr-FR"),
+        remainingDays
+      );
+      await sendEmail(client.email, payEmail.subject, payEmail.body);
+    }
+
     console.log(`[Webhook] Subscription activated: ${clientId}, ${plan}, remaining: +${remainingDays}d, expires: ${expiresAt.toISOString()}`);
+
+    // Notify admin of new payment
+    try {
+      const { data: adminClient } = await supabase
+        .from("clients")
+        .select("telegram_chat_id, telegram_linked")
+        .eq("is_admin", true)
+        .eq("telegram_linked", true)
+        .limit(1)
+        .single();
+
+      if (adminClient?.telegram_chat_id) {
+        const clientName = client?.name || "Client";
+        const amount = pendingSub.amount || 0;
+        const planName = plan === "yearly" ? "Annuel" : "Mensuel";
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: adminClient.telegram_chat_id,
+            text: `💰 <b>Nouveau paiement reçu !</b>\n\n👤 ${clientName}\n📋 Plan: ${planName}\n💵 Montant: ${amount.toLocaleString()} FCFA\n📅 Expire: ${expiresAt.toLocaleDateString("fr-FR")}${remainingDays > 0 ? `\n🎁 +${remainingDays} jours reportés` : ""}`,
+            parse_mode: "HTML",
+          }),
+        });
+      }
+    } catch (e) { console.error("[Webhook] Admin notification error:", e); }
   }
 
   if (status === "declined" || status === "cancelled") {

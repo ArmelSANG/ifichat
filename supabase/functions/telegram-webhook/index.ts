@@ -15,6 +15,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { sendEmail, addNotification, emailTemplates } from "../_shared/notifications.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -323,10 +324,44 @@ async function handleLinkCode(chatId: number, code: string) {
   await send(chatId,
     `✅ <b>Compte lié avec succès !</b>\n\n` +
     `👤 ${client.name}\n📧 ${client.email}\n\n` +
-    `Vous recevrez les messages ici.\n` +
-    `Tapez /active pour gérer vos conversations.\n` +
-    `Ou faites <b>Reply</b> sur un message visiteur pour répondre.`
+    `🔔 Vous recevrez les messages de vos visiteurs ici.\n\n` +
+    `<b>Commandes utiles :</b>\n` +
+    `/active — Conversations actives\n` +
+    `/a1 — Voir historique conversation 1\n` +
+    `/r1 texte — Répondre\n` +
+    `/status — État du compte\n\n` +
+    `Ou faites <b>Reply</b> sur un message visiteur pour répondre directement.`
   );
+
+  // Dashboard notification
+  await addNotification(
+    client.id, "telegram_linked",
+    "Telegram connecté ✅",
+    "Votre bot Telegram est lié. Vous recevrez les messages de vos visiteurs directement sur Telegram.",
+    "/dashboard"
+  );
+
+  // Email notification
+  const tgEmail = emailTemplates.telegramLinked(client.name);
+  await sendEmail(client.email, tgEmail.subject, tgEmail.body);
+
+  // Notify admin
+  try {
+    const { data: admin } = await supabase
+      .from("clients")
+      .select("telegram_chat_id, telegram_linked")
+      .eq("is_admin", true)
+      .eq("telegram_linked", true)
+      .neq("id", client.id)
+      .limit(1)
+      .single();
+
+    if (admin?.telegram_chat_id) {
+      await send(admin.telegram_chat_id,
+        `🔗 <b>Nouveau Telegram lié</b>\n\n👤 ${client.name}\n📧 ${client.email}`
+      );
+    }
+  } catch (e) { /* skip */ }
 }
 
 // ═══════════════════════════════════════════════════════════
