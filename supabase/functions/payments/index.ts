@@ -109,7 +109,24 @@ async function createCheckout(body: any) {
     return reply({ error: "Client not found" }, 404);
   }
 
-  const amount = plan === "monthly" ? 600 : 6000;
+  // Read dynamic prices from settings
+  let monthlyPrice = 600;
+  let yearlyPrice = 6000;
+  try {
+    const { data: settings } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "plans")
+      .single();
+    if (settings?.value) {
+      monthlyPrice = settings.value.monthly?.price || 600;
+      yearlyPrice = settings.value.yearly?.price || 6000;
+    }
+  } catch (e) {
+    console.log("[Checkout] Using default prices");
+  }
+
+  const amount = plan === "monthly" ? monthlyPrice : yearlyPrice;
   const description = plan === "monthly"
     ? "ifiChat - Abonnement Mensuel"
     : "ifiChat - Abonnement Annuel";

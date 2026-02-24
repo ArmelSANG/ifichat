@@ -20,6 +20,7 @@ const NAV = [
   { id: 'overview', label: 'Vue d\'ensemble', icon: I.home },
   { id: 'clients', label: 'Clients', icon: I.users },
   { id: 'revenue', label: 'Revenus', icon: I.dollar },
+  { id: 'pricing', label: 'Tarifs', icon: I.settings },
   { id: 'activity', label: 'Activité', icon: I.activity },
 ];
 
@@ -30,9 +31,13 @@ export default function Admin() {
   const [stats, setStats] = useState({ totalClients: 0, activeClients: 0, totalMessages: 0, totalRevenue: 0 });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [plans, setPlans] = useState(null);
+  const [savingPlans, setSavingPlans] = useState(false);
+  const [plansSaved, setPlansSaved] = useState(false);
 
   useEffect(() => {
     loadData();
+    loadPlans();
   }, []);
 
   async function loadData() {
@@ -74,6 +79,73 @@ export default function Admin() {
     c.email?.toLowerCase().includes(search.toLowerCase()) ||
     c.domain?.toLowerCase().includes(search.toLowerCase())
   );
+
+  async function loadPlans() {
+    try {
+      const { data } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'plans')
+        .single();
+      if (data?.value) setPlans(data.value);
+    } catch (e) {
+      // Table might not exist yet, use defaults
+      setPlans({
+        trial: { name: 'Essai gratuit', price: 0, duration: '7 jours', features: ['1 widget', 'Chat en temps réel', 'Réponse Telegram', 'Fichiers & images'] },
+        monthly: { name: 'Mensuel', price: 600, duration: 'mois', currency: 'FCFA', features: ['Tout de l\'essai', 'Conversations illimitées', 'Widget personnalisable', 'Support prioritaire'] },
+        yearly: { name: 'Annuel', price: 6000, duration: 'an', currency: 'FCFA', features: ['Tout du mensuel', '2 mois offerts', 'Badge vérifié', 'Support VIP Telegram'] },
+      });
+    }
+  }
+
+  async function savePlans() {
+    setSavingPlans(true);
+    try {
+      const { error } = await supabase
+        .from('settings')
+        .upsert({ key: 'plans', value: plans, updated_at: new Date().toISOString() });
+      if (error) {
+        console.error('Save plans error:', error);
+        alert('Erreur: ' + error.message);
+      } else {
+        setPlansSaved(true);
+        setTimeout(() => setPlansSaved(false), 2000);
+      }
+    } catch (e) {
+      alert('Erreur de sauvegarde');
+    }
+    setSavingPlans(false);
+  }
+
+  function updatePlan(planKey, field, value) {
+    setPlans(prev => ({
+      ...prev,
+      [planKey]: { ...prev[planKey], [field]: value },
+    }));
+  }
+
+  function updatePlanFeature(planKey, index, value) {
+    setPlans(prev => {
+      const features = [...(prev[planKey].features || [])];
+      features[index] = value;
+      return { ...prev, [planKey]: { ...prev[planKey], features } };
+    });
+  }
+
+  function addPlanFeature(planKey) {
+    setPlans(prev => ({
+      ...prev,
+      [planKey]: { ...prev[planKey], features: [...(prev[planKey].features || []), ''] },
+    }));
+  }
+
+  function removePlanFeature(planKey, index) {
+    setPlans(prev => {
+      const features = [...(prev[planKey].features || [])];
+      features.splice(index, 1);
+      return { ...prev, [planKey]: { ...prev[planKey], features } };
+    });
+  }
 
   function renderOverview() {
     const cards = [
@@ -209,7 +281,120 @@ export default function Admin() {
     );
   }
 
-  const pages = { overview: renderOverview, clients: renderClients, revenue: renderRevenue, activity: renderActivity };
+  function renderPricing() {
+    if (!plans) return <p>Chargement...</p>;
+
+    const planKeys = [
+      { key: 'trial', label: '🎁 Essai gratuit', color: '#F59E0B' },
+      { key: 'monthly', label: '📅 Mensuel', color: '#0D9488' },
+      { key: 'yearly', label: '🏆 Annuel', color: '#6366F1' },
+    ];
+
+    const inputStyle = {
+      width: '100%', padding: '10px 12px', borderRadius: 10,
+      border: '1.5px solid #e2e8f0', fontSize: 14, fontFamily: 'inherit',
+      outline: 'none', transition: 'border 0.2s',
+    };
+
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+          <h2 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.5px' }}>Gestion des tarifs</h2>
+          <button onClick={savePlans} disabled={savingPlans} style={{
+            padding: '10px 24px', borderRadius: 12, border: 'none',
+            background: plansSaved ? '#059669' : 'linear-gradient(135deg, #0D9488, #0F766E)',
+            color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            opacity: savingPlans ? 0.7 : 1,
+          }}>
+            {savingPlans ? 'Sauvegarde...' : plansSaved ? '✅ Sauvegardé !' : '💾 Sauvegarder les tarifs'}
+          </button>
+        </div>
+        <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 28 }}>
+          Les modifications seront visibles sur la page d'accueil et le dashboard client en temps réel.
+        </p>
+
+        <div style={{ display: 'grid', gap: 20 }}>
+          {planKeys.map(({ key, label, color }) => (
+            <div key={key} style={{
+              background: '#fff', borderRadius: 18, padding: 24,
+              border: '1px solid #f0f0f0', boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+            }}>
+              <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 18, color }}>
+                {label}
+              </h3>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 18 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Nom du plan</label>
+                  <input
+                    style={inputStyle}
+                    value={plans[key]?.name || ''}
+                    onChange={e => updatePlan(key, 'name', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Prix</label>
+                  <input
+                    style={inputStyle}
+                    type="number"
+                    value={plans[key]?.price ?? 0}
+                    onChange={e => updatePlan(key, 'price', parseInt(e.target.value) || 0)}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Durée</label>
+                  <input
+                    style={inputStyle}
+                    value={plans[key]?.duration || ''}
+                    onChange={e => updatePlan(key, 'duration', e.target.value)}
+                    placeholder="ex: mois, an, 7 jours"
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Devise</label>
+                  <input
+                    style={inputStyle}
+                    value={plans[key]?.currency || ''}
+                    onChange={e => updatePlan(key, 'currency', e.target.value)}
+                    placeholder="FCFA"
+                  />
+                </div>
+              </div>
+
+              {/* Features */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 8 }}>
+                  Fonctionnalités affichées
+                </label>
+                {(plans[key]?.features || []).map((feat, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                    <input
+                      style={{ ...inputStyle, flex: 1 }}
+                      value={feat}
+                      onChange={e => updatePlanFeature(key, i, e.target.value)}
+                      placeholder={`Fonctionnalité ${i + 1}`}
+                    />
+                    <button onClick={() => removePlanFeature(key, i)} style={{
+                      background: '#FEE2E2', border: 'none', borderRadius: 8,
+                      width: 36, height: 40, cursor: 'pointer', color: '#DC2626',
+                      fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>✕</button>
+                  </div>
+                ))}
+                <button onClick={() => addPlanFeature(key)} style={{
+                  background: 'none', border: '1.5px dashed #d1d5db', borderRadius: 8,
+                  padding: '8px 16px', fontSize: 13, color: '#94a3b8', cursor: 'pointer',
+                  width: '100%', marginTop: 4, fontFamily: 'inherit',
+                }}>+ Ajouter une fonctionnalité</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const pages = { overview: renderOverview, clients: renderClients, revenue: renderRevenue, pricing: renderPricing, activity: renderActivity };
 
   return (
     <div style={{

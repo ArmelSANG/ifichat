@@ -34,6 +34,11 @@ export default function Dashboard() {
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dynPlans, setDynPlans] = useState(null);
+
+  useEffect(() => {
+    loadDynPlans();
+  }, []);
 
   useEffect(() => {
     if (client?.id) {
@@ -68,6 +73,13 @@ export default function Dashboard() {
       .eq('client_id', client.id)
       .single();
     setWidgetConfig(data);
+  }
+
+  async function loadDynPlans() {
+    try {
+      const { data } = await supabase.from('settings').select('value').eq('key', 'plans').single();
+      if (data?.value) setDynPlans(data.value);
+    } catch (e) { console.log('Using default plans'); }
   }
 
   async function saveWidgetConfig() {
@@ -314,6 +326,26 @@ export default function Dashboard() {
   }
 
   function renderPlan() {
+    const mp = dynPlans?.monthly || PLANS.monthly;
+    const yp = dynPlans?.yearly || PLANS.yearly;
+    const monthlyPrice = mp.price || 600;
+    const yearlyPrice = yp.price || 6000;
+    const savings = (monthlyPrice * 12) - yearlyPrice;
+
+    const planCards = [
+      {
+        plan: 'monthly',
+        name: mp.name || 'Mensuel',
+        price: `${monthlyPrice.toLocaleString()} ${mp.currency || 'F'}/${mp.duration || 'mois'}`,
+      },
+      {
+        plan: 'yearly',
+        name: yp.name || 'Annuel',
+        price: `${yearlyPrice.toLocaleString()} ${yp.currency || 'F'}/${yp.duration || 'an'}`,
+        badge: savings > 0 ? `${savings.toLocaleString()} F d'économie` : null,
+      },
+    ];
+
     return (
       <div style={{ maxWidth: 600 }}>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Votre abonnement</h3>
@@ -324,7 +356,7 @@ export default function Dashboard() {
           }}>
             <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 4 }}>Plan actif</div>
             <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
-              {subscription.plan === 'yearly' ? 'Annuel' : subscription.plan === 'monthly' ? 'Mensuel' : 'Essai'}
+              {subscription.plan === 'yearly' ? (yp.name || 'Annuel') : subscription.plan === 'monthly' ? (mp.name || 'Mensuel') : 'Essai'}
             </div>
             <div style={{ fontSize: 14, opacity: 0.8 }}>
               Expire le {new Date(subscription.expiresAt).toLocaleDateString('fr-FR')}
@@ -344,10 +376,7 @@ export default function Dashboard() {
         )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-          {[
-            { plan: 'monthly', name: 'Mensuel', price: '600 F/mois' },
-            { plan: 'yearly', name: 'Annuel', price: '6 000 F/an', badge: '2 mois offerts' },
-          ].map(p => (
+          {planCards.map(p => (
             <div key={p.plan} style={{
               background: '#fff', border: '2px solid #f0f0f0', borderRadius: 16, padding: '24px 20px',
               position: 'relative',

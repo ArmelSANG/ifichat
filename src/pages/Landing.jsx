@@ -1,7 +1,65 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import { PLANS } from '../lib/constants';
 
 export default function Landing() {
   const navigate = useNavigate();
+  const [plans, setPlans] = useState(null);
+
+  useEffect(() => {
+    loadPlans();
+  }, []);
+
+  async function loadPlans() {
+    try {
+      const { data } = await supabase
+        .from('settings')
+        .select('value')
+        .eq('key', 'plans')
+        .single();
+      if (data?.value) setPlans(data.value);
+    } catch (e) {
+      console.log('Using default plans');
+    }
+  }
+
+  // Use DB plans or fallback to constants
+  const p = plans || PLANS;
+  const trial = p.trial || PLANS.trial;
+  const monthly = p.monthly || PLANS.monthly;
+  const yearly = p.yearly || PLANS.yearly;
+
+  const pricingCards = [
+    {
+      ...trial,
+      name: trial.name || 'Essai',
+      priceDisplay: '0',
+      unit: trial.duration || '7 jours',
+      features: trial.features || ['1 widget', 'Chat en temps réel', 'Réponse Telegram', 'Fichiers & images'],
+      cta: 'Commencer gratuitement', popular: false,
+      bg: '#fff', border: '#e2e8f0',
+    },
+    {
+      ...monthly,
+      name: monthly.name || 'Mensuel',
+      priceDisplay: (monthly.price || 600).toLocaleString(),
+      unit: `${monthly.currency || 'FCFA'} / ${monthly.duration || 'mois'}`,
+      features: monthly.features || ['Tout de l\'essai', 'Conversations illimitées', 'Widget personnalisable', 'Support prioritaire'],
+      cta: 'Choisir le mensuel', popular: false,
+      bg: '#fff', border: '#e2e8f0',
+    },
+    {
+      ...yearly,
+      name: yearly.name || 'Annuel',
+      priceDisplay: (yearly.price || 6000).toLocaleString(),
+      unit: `${yearly.currency || 'FCFA'} / ${yearly.duration || 'an'}`,
+      features: yearly.features || ['Tout du mensuel', '2 mois offerts', 'Badge vérifié', 'Support VIP Telegram'],
+      cta: 'Économisez ' + ((monthly.price || 600) * 12 - (yearly.price || 6000)).toLocaleString() + ' F',
+      popular: true,
+      bg: 'linear-gradient(135deg, #0D9488, #0F766E)', border: '#0D9488',
+    },
+  ];
 
   return (
     <div style={{ fontFamily: '"DM Sans", system-ui, sans-serif', background: '#fff' }}>
@@ -26,14 +84,12 @@ export default function Landing() {
               ifi<span style={{ color: '#0D9488' }}>Chat</span>
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button onClick={() => navigate('/login')} style={{
-              padding: '8px 18px', borderRadius: 10, border: 'none',
-              background: 'linear-gradient(135deg, #0D9488, #0F766E)', color: '#fff',
-              fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-              boxShadow: '0 4px 12px rgba(13,148,136,0.3)',
-            }}>Commencer</button>
-          </div>
+          <button onClick={() => navigate('/login')} style={{
+            padding: '8px 18px', borderRadius: 10, border: 'none',
+            background: 'linear-gradient(135deg, #0D9488, #0F766E)', color: '#fff',
+            fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            boxShadow: '0 4px 12px rgba(13,148,136,0.3)',
+          }}>Commencer</button>
         </div>
       </nav>
 
@@ -74,13 +130,12 @@ export default function Landing() {
               padding: '16px 36px', borderRadius: 14, border: 'none',
               background: 'linear-gradient(135deg, #0D9488, #0F766E)', color: '#fff',
               fontSize: 17, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-              boxShadow: '0 8px 30px rgba(13,148,136,0.35)',
-              transition: 'transform 0.2s',
+              boxShadow: '0 8px 30px rgba(13,148,136,0.35)', transition: 'transform 0.2s',
             }}
               onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
               onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
             >
-              Essai gratuit 7 jours →
+              Essai gratuit {trial.duration || '7 jours'} →
             </button>
             <button onClick={() => document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' })}
               style={{
@@ -142,8 +197,7 @@ export default function Landing() {
               { icon: '🔒', title: 'Données sécurisées', desc: 'Hébergement Supabase, chiffrement SSL' },
             ].map((f, i) => (
               <div key={i} style={{
-                padding: '28px 20px', borderRadius: 16, border: '1px solid #f0f0f0',
-                textAlign: 'left',
+                padding: '28px 20px', borderRadius: 16, border: '1px solid #f0f0f0', textAlign: 'left',
               }}>
                 <span style={{ fontSize: 28, display: 'block', marginBottom: 12 }}>{f.icon}</span>
                 <h4 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{f.title}</h4>
@@ -164,26 +218,7 @@ export default function Landing() {
             Commencez gratuitement, payez quand vous êtes prêt
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20 }}>
-            {[
-              {
-                name: 'Essai', price: '0', unit: '7 jours',
-                features: ['1 widget', 'Chat en temps réel', 'Réponse Telegram', 'Fichiers & images'],
-                cta: 'Commencer gratuitement', popular: false,
-                bg: '#fff', border: '#e2e8f0',
-              },
-              {
-                name: 'Mensuel', price: '600', unit: 'FCFA / mois',
-                features: ['Tout de l\'essai', 'Conversations illimitées', 'Widget personnalisable', 'Support prioritaire'],
-                cta: 'Choisir le mensuel', popular: false,
-                bg: '#fff', border: '#e2e8f0',
-              },
-              {
-                name: 'Annuel', price: '6 000', unit: 'FCFA / an',
-                features: ['Tout du mensuel', '2 mois offerts', 'Badge "vérifié"', 'Support VIP Telegram'],
-                cta: 'Économisez 1 200 F', popular: true,
-                bg: 'linear-gradient(135deg, #0D9488, #0F766E)', border: '#0D9488',
-              },
-            ].map((plan, i) => (
+            {pricingCards.map((plan, i) => (
               <div key={i} style={{
                 background: plan.bg, border: `2px solid ${plan.border}`,
                 borderRadius: 24, padding: '36px 28px', position: 'relative',
@@ -198,7 +233,7 @@ export default function Landing() {
                 )}
                 <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{plan.name}</h3>
                 <div style={{ fontSize: 42, fontWeight: 800, letterSpacing: '-2px', margin: '12px 0 4px' }}>
-                  {plan.price}<span style={{ fontSize: 16, fontWeight: 500, opacity: 0.7 }}> {plan.unit}</span>
+                  {plan.priceDisplay}<span style={{ fontSize: 16, fontWeight: 500, opacity: 0.7 }}> {plan.unit}</span>
                 </div>
                 <ul style={{ listStyle: 'none', padding: 0, margin: '24px 0 28px', textAlign: 'left' }}>
                   {plan.features.map((f, j) => (
@@ -230,10 +265,7 @@ export default function Landing() {
       </section>
 
       {/* FOOTER */}
-      <footer style={{
-        padding: '40px 24px', borderTop: '1px solid #f0f0f0',
-        textAlign: 'center',
-      }}>
+      <footer style={{ padding: '40px 24px', borderTop: '1px solid #f0f0f0', textAlign: 'center' }}>
         <div style={{ fontSize: 14, color: '#94a3b8' }}>
           © 2026 ifiChat par <a href="https://ifiaas.com" target="_blank" rel="noopener" style={{ color: '#0D9488', textDecoration: 'none', fontWeight: 600 }}>ifiAAS</a> — Fait au Bénin 🇧🇯
         </div>
