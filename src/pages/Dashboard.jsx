@@ -375,7 +375,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div className="dash-plan-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           {planCards.map(p => (
             <div key={p.plan} style={{
               background: '#fff', border: '2px solid #f0f0f0', borderRadius: 16, padding: '24px 20px',
@@ -418,25 +418,37 @@ export default function Dashboard() {
       fontFamily: '"DM Sans", system-ui, sans-serif',
       background: '#F8F9FB', minHeight: '100vh',
     }}>
+      <style>{`
+        @media (max-width: 640px) {
+          .dash-header { padding: 0 12px !important; }
+          .dash-content { padding: 12px !important; }
+          .dash-tabs button { padding: 8px 12px !important; font-size: 12px !important; }
+          .dash-tabs button svg { display: none; }
+          .dash-plan-grid { grid-template-columns: 1fr !important; }
+          .dash-widget-grid { grid-template-columns: 1fr !important; }
+          .dash-embed-code { font-size: 11px !important; word-break: break-all; }
+        }
+      `}</style>
+
       {/* Top bar */}
-      <header style={{
-        height: 60, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(20px)',
+      <header className="dash-header" style={{
+        height: 56, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(20px)',
         borderBottom: '1px solid rgba(0,0,0,0.05)',
-        display: 'flex', alignItems: 'center', padding: '0 24px',
+        display: 'flex', alignItems: 'center', padding: '0 20px',
         position: 'sticky', top: 0, zIndex: 100,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{
-            width: 30, height: 30, borderRadius: 8,
+            width: 28, height: 28, borderRadius: 8,
             background: 'linear-gradient(135deg, #0D9488, #0F766E)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontWeight: 800, fontSize: 9, fontFamily: '"Space Mono", monospace',
+            color: '#fff', fontWeight: 800, fontSize: 9,
           }}>ifi</div>
-          <span style={{ fontSize: 15, fontWeight: 700 }}>ifi<span style={{ color: '#0D9488' }}>Chat</span></span>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>ifi<span style={{ color: '#0D9488' }}>Chat</span></span>
         </div>
         <div style={{ flex: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 13, color: '#666' }}>{client?.name || client?.email}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 12, color: '#666', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{client?.name || client?.email}</span>
           <button onClick={signOut} style={{
             background: 'none', border: 'none', color: '#999',
             cursor: 'pointer', display: 'flex', padding: 4,
@@ -444,11 +456,13 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }}>
+      <div className="dash-content" style={{ maxWidth: 900, margin: '0 auto', padding: '20px 16px' }}>
         {/* Tabs */}
-        <div style={{
-          display: 'flex', gap: 4, marginBottom: 24, overflowX: 'auto',
-          background: '#fff', borderRadius: 14, padding: 4, border: '1px solid #f0f0f0',
+        <div className="dash-tabs" style={{
+          display: 'flex', gap: 3, marginBottom: 20, overflowX: 'auto',
+          background: '#fff', borderRadius: 12, padding: 3, border: '1px solid #f0f0f0',
+          WebkitOverflowScrolling: 'touch',
+          msOverflowStyle: 'none', scrollbarWidth: 'none',
         }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{

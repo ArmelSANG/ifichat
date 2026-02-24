@@ -158,7 +158,7 @@ export default function Admin() {
     return (
       <div>
         <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 20, letterSpacing: '-0.5px' }}>Tableau de bord</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 28 }}>
+        <div className="admin-grid-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 28 }}>
           {cards.map((c, i) => (
             <div key={i} style={{
               background: c.bg, borderRadius: 16, padding: '22px 18px',
@@ -323,7 +323,7 @@ export default function Admin() {
                 {label}
               </h3>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 18 }}>
+              <div className="admin-grid-1col" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 18 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 4 }}>Nom du plan</label>
                   <input
@@ -396,69 +396,129 @@ export default function Admin() {
 
   const pages = { overview: renderOverview, clients: renderClients, revenue: renderRevenue, pricing: renderPricing, activity: renderActivity };
 
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return (
     <div style={{
       fontFamily: '"DM Sans", system-ui, sans-serif',
-      background: '#F8F9FB', minHeight: '100vh', display: 'flex',
+      background: '#F8F9FB', minHeight: '100vh',
     }}>
-      {/* Sidebar */}
-      <aside style={{
-        width: 240, background: 'linear-gradient(180deg, #0F172A, #1E293B)',
-        display: 'flex', flexDirection: 'column', flexShrink: 0,
-        height: '100vh', position: 'sticky', top: 0, color: '#fff',
-      }}>
-        <div style={{ padding: '20px 18px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 10,
-            background: 'linear-gradient(135deg, #0D9488, #14B8A6)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 800, fontSize: 11,
-          }}>ifi</div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 15 }}>ifi<span style={{ color: '#14B8A6' }}>Chat</span></div>
-            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: 1.5 }}>ADMIN</div>
+      <style>{`
+        @media (min-width: 769px) {
+          .admin-layout { display: flex; }
+          .admin-sidebar {
+            width: 240px; display: flex !important; flex-direction: column; flex-shrink: 0;
+            height: 100vh; position: sticky; top: 0;
+          }
+          .admin-mobile-header { display: none !important; }
+          .admin-mobile-nav { display: none !important; }
+          .admin-main { flex: 1; padding: 28px; }
+        }
+        @media (max-width: 768px) {
+          .admin-layout { display: flex; flex-direction: column; }
+          .admin-sidebar { display: none !important; }
+          .admin-mobile-header { display: flex !important; }
+          .admin-mobile-nav { display: flex !important; }
+          .admin-main { flex: 1; padding: 16px; padding-bottom: 80px; }
+          .admin-grid-stats { grid-template-columns: 1fr 1fr !important; }
+          .admin-grid-1col { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
+
+      <div className="admin-layout">
+        {/* Desktop Sidebar */}
+        <aside className="admin-sidebar" style={{
+          background: 'linear-gradient(180deg, #0F172A, #1E293B)', color: '#fff',
+        }}>
+          <div style={{ padding: '20px 18px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 10,
+              background: 'linear-gradient(135deg, #0D9488, #14B8A6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 800, fontSize: 11,
+            }}>ifi</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>ifi<span style={{ color: '#14B8A6' }}>Chat</span></div>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: 1.5 }}>ADMIN</div>
+            </div>
           </div>
-        </div>
+          <nav style={{ flex: 1, padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {NAV.map(n => (
+              <button key={n.id} onClick={() => setPage(n.id)} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 14px', borderRadius: 10, border: 'none',
+                background: page === n.id ? 'rgba(13,148,136,0.15)' : 'transparent',
+                color: page === n.id ? '#14B8A6' : 'rgba(255,255,255,0.45)',
+                fontSize: 13, fontWeight: page === n.id ? 600 : 500,
+                cursor: 'pointer', width: '100%', textAlign: 'left', fontFamily: 'inherit',
+              }}>{n.icon} {n.label}</button>
+            ))}
+          </nav>
+          <div style={{ padding: '14px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 8, background: '#EF4444',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 700, fontSize: 13, color: '#fff',
+            }}>A</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Admin</div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>{client?.email}</div>
+            </div>
+            <button onClick={signOut} style={{
+              background: 'none', border: 'none', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', display: 'flex',
+            }}>{I.logout}</button>
+          </div>
+        </aside>
 
-        <nav style={{ flex: 1, padding: '14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {NAV.map(n => (
-            <button key={n.id} onClick={() => setPage(n.id)} style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 14px', borderRadius: 10, border: 'none',
-              background: page === n.id ? 'rgba(13,148,136,0.15)' : 'transparent',
-              color: page === n.id ? '#14B8A6' : 'rgba(255,255,255,0.45)',
-              fontSize: 13, fontWeight: page === n.id ? 600 : 500,
-              cursor: 'pointer', width: '100%', textAlign: 'left', fontFamily: 'inherit',
-              transition: 'all 0.2s',
-            }}>{n.icon} {n.label}</button>
-          ))}
-        </nav>
-
-        <div style={{ padding: '14px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8, background: '#EF4444',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 700, fontSize: 13, color: '#fff',
-          }}>A</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, fontWeight: 600 }}>Admin</div>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>{client?.email}</div>
+        {/* Mobile Header */}
+        <header className="admin-mobile-header" style={{
+          display: 'none', height: 56, background: '#0F172A', color: '#fff',
+          alignItems: 'center', padding: '0 16px', justifyContent: 'space-between',
+          position: 'sticky', top: 0, zIndex: 100,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 30, height: 30, borderRadius: 8,
+              background: 'linear-gradient(135deg, #0D9488, #14B8A6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 800, fontSize: 10,
+            }}>ifi</div>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>ifi<span style={{ color: '#14B8A6' }}>Chat</span> <span style={{ fontSize: 9, opacity: 0.4, letterSpacing: 1 }}>ADMIN</span></span>
           </div>
           <button onClick={signOut} style={{
-            background: 'none', border: 'none', color: 'rgba(255,255,255,0.3)',
-            cursor: 'pointer', display: 'flex',
+            background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', display: 'flex',
           }}>{I.logout}</button>
-        </div>
-      </aside>
+        </header>
 
-      {/* Main */}
-      <main style={{ flex: 1, padding: 28 }}>
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>Chargement...</div>
-        ) : (
-          pages[page]?.()
-        )}
-      </main>
+        {/* Main Content */}
+        <main className="admin-main">
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 60, color: '#999' }}>Chargement...</div>
+          ) : (
+            pages[page]?.()
+          )}
+        </main>
+
+        {/* Mobile Bottom Nav */}
+        <nav className="admin-mobile-nav" style={{
+          display: 'none', position: 'fixed', bottom: 0, left: 0, right: 0,
+          background: '#0F172A', borderTop: '1px solid rgba(255,255,255,0.06)',
+          justifyContent: 'space-around', padding: '8px 0 12px', zIndex: 100,
+        }}>
+          {NAV.map(n => (
+            <button key={n.id} onClick={() => setPage(n.id)} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+              color: page === n.id ? '#14B8A6' : 'rgba(255,255,255,0.35)',
+              fontSize: 9, fontWeight: page === n.id ? 600 : 400, fontFamily: 'inherit',
+              padding: '4px 8px',
+            }}>
+              {n.icon}
+              {n.label}
+            </button>
+          ))}
+        </nav>
+      </div>
     </div>
   );
 }

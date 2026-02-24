@@ -8,10 +8,16 @@
   padding: 0;
 }
 
+input, textarea, select, button {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
 body {
   font-family: 'DM Sans', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
 ::-webkit-scrollbar { width: 5px; }
