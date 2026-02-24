@@ -9,6 +9,7 @@
 //   /a1, /a2...   — Voir historique conversation N
 //   /a1 fermer    — Fermer conversation N
 //   /r1 texte     — Répondre à conversation N
+//   /unlink       — Délier le compte Telegram
 //   IFICHAT-XXXX  — Lier le compte
 //   Reply         — Répondre au visiteur
 // ============================================
@@ -104,6 +105,7 @@ async function cmdStart(chatId: number) {
     `/r1 texte — Répondre à conversation 1\n` +
     `/a1 fermer — Fermer conversation 1\n` +
     `/status — État du compte\n` +
+    `/unlink — Délier Telegram\n` +
     `/help — Cette aide\n\n` +
     `Ou faites <b>Reply</b> sur un message visiteur pour répondre directement.\n\n` +
     `Pas encore lié ? Envoyez votre code <b>IFICHAT-XXXXXX</b> du dashboard.`
@@ -329,7 +331,8 @@ async function handleLinkCode(chatId: number, code: string) {
     `/active — Conversations actives\n` +
     `/a1 — Voir historique conversation 1\n` +
     `/r1 texte — Répondre\n` +
-    `/status — État du compte\n\n` +
+    `/status — État du compte\n` +
+    `/unlink — Délier Telegram\n\n` +
     `Ou faites <b>Reply</b> sur un message visiteur pour répondre directement.`
   );
 
@@ -475,6 +478,41 @@ serve(async (req) => {
       return new Response("OK", { status: 200 });
     }
 
+    if (textLower === "/unlink") {
+      const client = await getClient(chatId);
+      if (!client) {
+        await send(chatId, "❌ Aucun compte lié.");
+        return new Response("OK", { status: 200 });
+      }
+      // Generate new link code
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      let newCode = "IFICHAT-";
+      for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
+
+      await supabase.from("clients").update({
+        telegram_linked: false,
+        telegram_chat_id: null,
+        telegram_link_code: newCode,
+      }).eq("id", client.id);
+
+      await send(chatId,
+        `🔓 <b>Compte délié</b>\n\n` +
+        `${client.name}, votre Telegram a été déconnecté d'ifiChat.\n` +
+        `Vous ne recevrez plus les messages ici.\n\n` +
+        `Pour reconnecter, utilisez le nouveau code dans votre dashboard.`
+      );
+
+      // Dashboard notification
+      await addNotification(
+        client.id, "telegram_unlinked",
+        "Telegram déconnecté",
+        "Votre bot Telegram a été délié. Reconnectez-le depuis l'onglet Telegram.",
+        "/dashboard"
+      );
+
+      return new Response("OK", { status: 200 });
+    }
+
     // /a1, /a2, /a3... (with optional "fermer")
     const aMatch = textLower.match(/^\/a(\d+)\s*(.*)?$/);
     if (aMatch) {
@@ -520,7 +558,8 @@ serve(async (req) => {
         "/active — Voir vos conversations\n" +
         "/a1 — Historique conversation 1\n" +
         "/r1 texte — Répondre\n" +
-        "/status — État du compte\n\n" +
+        "/status — État du compte\n" +
+        "/unlink — Délier Telegram\n\n" +
         "Ou faites <b>Reply</b> sur un message visiteur."
       );
     } else {

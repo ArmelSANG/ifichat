@@ -46,7 +46,7 @@ export default function Admin() {
       // Load all clients
       const { data: allClients } = await supabase
         .from('clients')
-        .select('*, subscriptions(plan, status, expires_at)')
+        .select('*, subscriptions(plan, status, expires_at, amount)')
         .eq('is_admin', false)
         .order('created_at', { ascending: false });
 
@@ -61,11 +61,21 @@ export default function Admin() {
         .from('messages')
         .select('id', { count: 'exact', head: true });
 
+      // Calculate real revenue from all paid subscriptions (not trial/pending)
+      let totalRevenue = 0;
+      (allClients || []).forEach(c => {
+        (c.subscriptions || []).forEach(s => {
+          if (s.plan !== 'trial' && s.status !== 'pending' && s.amount) {
+            totalRevenue += s.amount;
+          }
+        });
+      });
+
       setStats({
         totalClients: allClients?.length || 0,
         activeClients: active,
         totalMessages: msgCount || 0,
-        totalRevenue: active * 600, // simplified
+        totalRevenue,
       });
     } catch (e) {
       console.error(e);
@@ -152,7 +162,7 @@ export default function Admin() {
       { label: 'Total clients', value: stats.totalClients, color: '#6366F1', bg: '#EEF2FF' },
       { label: 'Clients actifs', value: stats.activeClients, color: '#059669', bg: '#ECFDF5' },
       { label: 'Messages total', value: stats.totalMessages.toLocaleString(), color: '#0D9488', bg: '#F0FDFA' },
-      { label: 'Revenus/mois', value: `${stats.totalRevenue.toLocaleString()} F`, color: '#F59E0B', bg: '#FFFBEB' },
+      { label: 'Revenu total', value: `${stats.totalRevenue.toLocaleString()} F`, color: '#F59E0B', bg: '#FFFBEB' },
     ];
 
     return (
@@ -256,17 +266,39 @@ export default function Admin() {
   }
 
   function renderRevenue() {
+    // Calculate monthly vs yearly revenue breakdown
+    let monthlyRev = 0, yearlyRev = 0, totalPaid = 0;
+    clients.forEach(c => {
+      (c.subscriptions || []).forEach(s => {
+        if (s.plan !== 'trial' && s.status !== 'pending' && s.amount) {
+          totalPaid += s.amount;
+          if (s.plan === 'monthly') monthlyRev += s.amount;
+          if (s.plan === 'yearly') yearlyRev += s.amount;
+        }
+      });
+    });
+
     return (
       <div>
         <h2 style={{ fontSize: 24, fontWeight: 700, marginBottom: 20 }}>Revenus</h2>
-        <p style={{ color: '#999', fontSize: 14 }}>Données en temps réel depuis FedaPay (mode live).</p>
         <div style={{
-          marginTop: 24, padding: 24, background: 'linear-gradient(135deg, #065F46, #059669)',
-          borderRadius: 18, color: '#fff',
+          marginTop: 8, padding: 28, background: 'linear-gradient(135deg, #065F46, #059669)',
+          borderRadius: 18, color: '#fff', marginBottom: 20,
         }}>
-          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Revenus estimés/mois</div>
-          <div style={{ fontSize: 36, fontWeight: 800 }}>{stats.totalRevenue.toLocaleString()} FCFA</div>
-          <div style={{ fontSize: 13, opacity: 0.7, marginTop: 8 }}>Basé sur {stats.activeClients} clients actifs</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Revenu total</div>
+          <div style={{ fontSize: 36, fontWeight: 800 }}>{totalPaid.toLocaleString()} FCFA</div>
+          <div style={{ fontSize: 13, opacity: 0.7, marginTop: 8 }}>{stats.activeClients} client(s) actif(s)</div>
+        </div>
+
+        <div className="admin-grid-stats" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: '20px', border: '1px solid #f0f0f0' }}>
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>Plans mensuels</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#0D9488' }}>{monthlyRev.toLocaleString()} F</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 14, padding: '20px', border: '1px solid #f0f0f0' }}>
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>Plans annuels</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#6366F1' }}>{yearlyRev.toLocaleString()} F</div>
+          </div>
         </div>
       </div>
     );

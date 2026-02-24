@@ -231,7 +231,7 @@ export default function Dashboard() {
   function renderWidget() {
     if (!widgetConfig) return <div style={{ color: '#999' }}>Chargement...</div>;
     return (
-      <div style={{ maxWidth: 500 }}>
+      <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Personnaliser le widget</h3>
         {[
           { key: 'business_name', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
@@ -353,22 +353,49 @@ export default function Dashboard() {
   function renderTelegram() {
     const code = client?.telegram_link_code;
     const linked = client?.telegram_linked;
+
+    async function unlinkTelegram() {
+      if (!confirm('Êtes-vous sûr de vouloir délier Telegram ? Vous ne recevrez plus les messages.')) return;
+      const { error } = await supabase
+        .from('clients')
+        .update({ telegram_linked: false, telegram_chat_id: null, telegram_link_code: generateNewCode() })
+        .eq('id', client.id);
+      if (!error) {
+        setClient({ ...client, telegram_linked: false, telegram_chat_id: null });
+        window.location.reload();
+      }
+    }
+
+    function generateNewCode() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = 'IFICHAT-';
+      for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+      return code;
+    }
+
     return (
-      <div style={{ maxWidth: 500 }}>
+      <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Liaison Telegram</h3>
         <p style={{ color: '#999', fontSize: 14, marginBottom: 24 }}>
           Recevez vos messages de chat directement dans Telegram et répondez en faisant Reply.
         </p>
         {linked ? (
-          <div style={{
-            background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '20px 24px',
-            display: 'flex', alignItems: 'center', gap: 14,
-          }}>
-            <div style={{ width: 42, height: 42, borderRadius: 12, background: '#059669', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{Icon.check}</div>
-            <div>
-              <div style={{ fontWeight: 600, color: '#065f46' }}>Telegram connecté</div>
-              <div style={{ fontSize: 13, color: '#10b981' }}>Vous recevez les messages en temps réel</div>
+          <div>
+            <div style={{
+              background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '20px 24px',
+              display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16,
+            }}>
+              <div style={{ width: 42, height: 42, borderRadius: 12, background: '#059669', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{Icon.check}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, color: '#065f46' }}>Telegram connecté</div>
+                <div style={{ fontSize: 13, color: '#10b981' }}>Vous recevez les messages en temps réel</div>
+              </div>
             </div>
+            <button onClick={unlinkTelegram} style={{
+              background: 'none', border: '1.5px solid #fca5a5', borderRadius: 10,
+              padding: '10px 20px', fontSize: 13, color: '#DC2626', cursor: 'pointer',
+              fontFamily: 'inherit', fontWeight: 500,
+            }}>Délier Telegram</button>
           </div>
         ) : (
           <div>
@@ -395,9 +422,23 @@ export default function Dashboard() {
     );
   }
 
+  const [copiedMk, setCopiedMk] = useState(false);
+
+  const mikrotikCmd = `/ip hotspot walled-garden
+add dst-host=chat.ifiaas.com comment="ifiChat Widget"
+add dst-host=twtbdwxixrlspbzqmpva.supabase.co comment="ifiChat API"
+add dst-host=fonts.googleapis.com comment="ifiChat Fonts"
+add dst-host=fonts.gstatic.com comment="ifiChat Fonts"`;
+
+  function copyMikrotik() {
+    navigator.clipboard.writeText(mikrotikCmd);
+    setCopiedMk(true);
+    setTimeout(() => setCopiedMk(false), 2000);
+  }
+
   function renderEmbed() {
     return (
-      <div style={{ maxWidth: 600 }}>
+      <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Code d'intégration</h3>
         <p style={{ color: '#999', fontSize: 14, marginBottom: 24 }}>
           Ajoutez cette ligne juste avant <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4 }}>&lt;/body&gt;</code> dans votre site.
@@ -434,6 +475,74 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        {/* MikroTik Section */}
+        <div style={{
+          marginTop: 28, background: '#fff', border: '1.5px solid #e2e8f0', borderRadius: 16, overflow: 'hidden',
+        }}>
+          <div style={{
+            padding: '16px 20px', borderBottom: '1px solid #f0f0f0',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 8, background: '#1E3A5F',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 800, color: '#fff',
+            }}>MT</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Intégration MikroTik Hotspot</div>
+              <div style={{ fontSize: 12, color: '#94a3b8' }}>Pour les pages de login captive portal</div>
+            </div>
+          </div>
+
+          <div style={{ padding: '18px 20px' }}>
+            <p style={{ fontSize: 13, color: '#64748b', lineHeight: 1.7, margin: '0 0 14px' }}>
+              Pour que le widget fonctionne sur une page de login MikroTik, il faut autoriser les domaines ifiChat 
+              dans le <strong>Walled Garden</strong>. Collez ces commandes dans le <strong>Terminal</strong> de votre routeur :
+            </p>
+
+            <div style={{
+              background: '#0F172A', borderRadius: 12, padding: '14px 16px 10px', overflow: 'hidden',
+            }}>
+              <div style={{
+                overflowX: 'auto', paddingBottom: 8,
+                WebkitOverflowScrolling: 'touch',
+              }}>
+                <pre style={{
+                  color: '#e2e8f0', fontSize: 12, fontFamily: '"Space Mono", monospace',
+                  lineHeight: 1.8, margin: 0, whiteSpace: 'pre',
+                }}>
+                  <span style={{ color: '#94a3b8' }}># Ouvrir dans Terminal MikroTik :</span>{'\n'}
+                  <span style={{ color: '#F472B6' }}>/ip hotspot walled-garden</span>{'\n'}
+                  <span style={{ color: '#86EFAC' }}>add</span> dst-host=<span style={{ color: '#FBBF24' }}>chat.ifiaas.com</span> comment=<span style={{ color: '#86EFAC' }}>"ifiChat Widget"</span>{'\n'}
+                  <span style={{ color: '#86EFAC' }}>add</span> dst-host=<span style={{ color: '#FBBF24' }}>twtbdwxixrlspbzqmpva.supabase.co</span> comment=<span style={{ color: '#86EFAC' }}>"ifiChat API"</span>{'\n'}
+                  <span style={{ color: '#86EFAC' }}>add</span> dst-host=<span style={{ color: '#FBBF24' }}>fonts.googleapis.com</span> comment=<span style={{ color: '#86EFAC' }}>"ifiChat Fonts"</span>{'\n'}
+                  <span style={{ color: '#86EFAC' }}>add</span> dst-host=<span style={{ color: '#FBBF24' }}>fonts.gstatic.com</span> comment=<span style={{ color: '#86EFAC' }}>"ifiChat Fonts"</span>
+                </pre>
+              </div>
+              <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={copyMikrotik} style={{
+                  background: copiedMk ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.1)',
+                  border: 'none', color: copiedMk ? '#34D399' : '#fff',
+                  padding: '8px 16px', borderRadius: 8,
+                  fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit',
+                  transition: 'all 0.2s',
+                }}>
+                  {copiedMk ? Icon.check : Icon.copy} {copiedMk ? 'Copié !' : 'Copier les commandes'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 14, fontSize: 12, color: '#94a3b8', lineHeight: 1.7 }}>
+              <strong style={{ color: '#64748b' }}>Étapes :</strong><br />
+              1. Ouvrez <strong>Winbox</strong> ou <strong>WebFig</strong> → Terminal<br />
+              2. Collez les commandes ci-dessus<br />
+              3. Ajoutez le code d'intégration dans votre <strong>login.html</strong><br />
+              4. Uploadez le fichier dans <strong>Files</strong> du routeur
+            </div>
+          </div>
+        </div>
+
         <div style={{ marginTop: 24, padding: 20, background: '#fefce8', border: '1px solid #fde68a', borderRadius: 12, fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
           <strong>Rappel :</strong> les messages sont conservés <strong>3 mois</strong>, les fichiers et images <strong>1 mois</strong>. Au-delà, ils sont automatiquement supprimés.
         </div>
@@ -463,7 +572,7 @@ export default function Dashboard() {
     ];
 
     return (
-      <div style={{ maxWidth: 600 }}>
+      <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Votre abonnement</h3>
         {subscription?.active ? (
           <div style={{
