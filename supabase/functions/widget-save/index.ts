@@ -47,10 +47,10 @@ serve(async (req) => {
       );
     }
 
-    // Allowed fields only
+    // Allowed fields only (must exist in widget_configs table)
     const allowed = [
       "business_name", "primary_color", "welcome_message",
-      "placeholder_text", "away_message", "position",
+      "placeholder_text", "position",
       "business_hours", "bottom_offset", "side_offset",
     ];
 

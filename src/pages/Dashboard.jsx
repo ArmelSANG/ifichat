@@ -169,7 +169,6 @@ export default function Dashboard() {
       position: widgetConfig.position,
       business_name: widgetConfig.business_name,
       business_hours: widgetConfig.business_hours,
-      away_message: widgetConfig.away_message,
       bottom_offset: widgetConfig.bottom_offset || 20,
       side_offset: widgetConfig.side_offset || 20,
     };
@@ -281,7 +280,6 @@ export default function Dashboard() {
           { key: 'primary_color', label: 'Couleur principale', type: 'color', placeholder: '' },
           { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea', placeholder: 'Ex: Bonjour ! 👋 Comment pouvons-nous vous aider aujourd\'hui ?' },
           { key: 'placeholder_text', label: 'Texte champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },
-          { key: 'away_message', label: 'Message absent', type: 'textarea', placeholder: 'Ex: Nous sommes hors ligne. Laissez votre message !' },
         ].map(field => (
           <div key={field.key} style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 5 }}>{field.label}</label>
@@ -396,15 +394,16 @@ export default function Dashboard() {
   function renderTelegram() {
     const code = client?.telegram_link_code;
     const linked = client?.telegram_linked;
+    const isForum = client?.telegram_is_forum;
 
     async function unlinkTelegram() {
-      if (!confirm('Êtes-vous sûr de vouloir délier Telegram ? Vous ne recevrez plus les messages.')) return;
+      if (!confirm('Êtes-vous sûr de vouloir délier Telegram ?')) return;
       const { error } = await supabase
         .from('clients')
-        .update({ telegram_linked: false, telegram_chat_id: null, telegram_link_code: generateNewCode() })
+        .update({ telegram_linked: false, telegram_chat_id: null, telegram_link_code: generateNewCode(), telegram_is_forum: false })
         .eq('id', client.id);
       if (!error) {
-        setClient({ ...client, telegram_linked: false, telegram_chat_id: null });
+        setClient({ ...client, telegram_linked: false, telegram_chat_id: null, telegram_is_forum: false });
         window.location.reload();
       }
     }
@@ -419,21 +418,31 @@ export default function Dashboard() {
     return (
       <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Liaison Telegram</h3>
-        <p style={{ color: '#999', fontSize: 14, marginBottom: 24 }}>
-          Recevez vos messages de chat directement dans Telegram et répondez en faisant Reply.
+        <p style={{ color: '#999', fontSize: 14, marginBottom: 20 }}>
+          Recevez vos messages directement dans Telegram. Chaque visiteur a son propre fil de discussion.
         </p>
         {linked ? (
           <div>
             <div style={{
-              background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '20px 24px',
-              display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16,
+              background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: '18px 20px',
+              display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14,
             }}>
               <div style={{ width: 42, height: 42, borderRadius: 12, background: '#059669', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{Icon.check}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 600, color: '#065f46' }}>Telegram connecté</div>
-                <div style={{ fontSize: 13, color: '#10b981' }}>Vous recevez les messages en temps réel</div>
+                <div style={{ fontSize: 13, color: '#10b981' }}>
+                  Mode : <strong>{isForum ? 'Forum (groupe avec topics)' : 'Privé (chat direct)'}</strong>
+                </div>
               </div>
             </div>
+            {isForum && (
+              <div style={{
+                background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12,
+                padding: '14px 18px', marginBottom: 14, fontSize: 13, color: '#1e40af', lineHeight: 1.6,
+              }}>
+                <strong>Mode Forum actif</strong> — Chaque visiteur a son propre topic dans votre groupe Telegram. Répondez directement dans le topic, sans commande !
+              </div>
+            )}
             <button onClick={unlinkTelegram} style={{
               background: 'none', border: '1.5px solid #fca5a5', borderRadius: 10,
               padding: '10px 20px', fontSize: 13, color: '#DC2626', cursor: 'pointer',
@@ -444,20 +453,48 @@ export default function Dashboard() {
           <div>
             <div style={{
               background: '#f8fafc', border: '2px dashed #e2e8f0', borderRadius: 14,
-              padding: '28px 24px', textAlign: 'center', marginBottom: 20,
+              padding: '24px 20px', textAlign: 'center', marginBottom: 18,
             }}>
               <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>Votre code de liaison</div>
               <div style={{
-                fontSize: 28, fontWeight: 800, letterSpacing: '3px', color: '#0F172A',
+                fontSize: 24, fontWeight: 800, letterSpacing: '3px', color: '#0F172A',
                 fontFamily: '"Space Mono", monospace',
               }}>{code || 'Chargement...'}</div>
             </div>
-            <div style={{ fontSize: 14, color: '#666', lineHeight: 1.8 }}>
-              <strong>Instructions :</strong><br />
-              1. Ouvrez Telegram<br />
-              2. Cherchez <strong>@ifiChat_Bot</strong><br />
-              3. Envoyez <strong>/start</strong><br />
-              4. Collez le code ci-dessus
+
+            {/* Mode Forum (recommended) */}
+            <div style={{
+              background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 14,
+              padding: '18px 20px', marginBottom: 16,
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1e40af', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                ⭐ Mode Forum (recommandé)
+              </div>
+              <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.7 }}>
+                Chaque visiteur a <strong>son propre topic</strong>. Répondez directement dedans.<br />
+                <br />
+                1. Créez un <strong>groupe Telegram</strong><br />
+                2. Activez les <strong>Topics</strong> (Paramètres du groupe → Topics)<br />
+                3. Ajoutez <strong>@ifichat_bot</strong> comme <strong>admin</strong><br />
+                4. Envoyez le code <strong>{code}</strong> dans le groupe
+              </div>
+            </div>
+
+            {/* Mode Privé */}
+            <div style={{
+              background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 14,
+              padding: '18px 20px',
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#64748b', marginBottom: 8 }}>
+                Mode Privé (simple)
+              </div>
+              <div style={{ fontSize: 13, color: '#666', lineHeight: 1.7 }}>
+                Tous les messages dans un seul chat. Répondez avec Reply ou /r1.<br />
+                <br />
+                1. Ouvrez <strong>@ifichat_bot</strong> en privé<br />
+                2. Envoyez <strong>/start</strong><br />
+                3. Collez le code <strong>{code}</strong>
+              </div>
             </div>
           </div>
         )}

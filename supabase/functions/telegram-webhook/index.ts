@@ -1,17 +1,19 @@
 // ============================================
 // ifiChat — Edge Function: Telegram Webhook
 //
-// Commandes:
-//   /start        — Bienvenue
-//   /status       — État du compte
-//   /help         — Aide
-//   /active       — Liste conversations actives
-//   /a1, /a2...   — Voir historique conversation N
-//   /a1 fermer    — Fermer conversation N
-//   /r1 texte     — Répondre à conversation N
-//   /unlink       — Délier le compte Telegram
-//   IFICHAT-XXXX  — Lier le compte
-//   Reply         — Répondre au visiteur
+// MODES:
+//   Forum (groupe avec topics) → Chaque visiteur a son topic, le client répond directement
+//   Privé (chat direct bot)    → Commandes /active, /r1, Reply, etc.
+//
+// Commandes (privé & forum General):
+//   /start, /help    — Aide
+//   /status          — État du compte
+//   /active          — Conversations actives
+//   /a1, /a2...      — Voir historique
+//   /a1 fermer       — Fermer conversation
+//   /r1 texte        — Répondre (mode privé)
+//   /unlink          — Délier Telegram
+//   IFICHAT-XXXX     — Lier le compte
 // ============================================
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
@@ -37,16 +39,14 @@ async function send(chatId: number, text: string, options: any = {}) {
   return res.json();
 }
 
-async function sendFile(chatId: number, fileUrl: string, caption: string, type: string) {
+async function sendFile(chatId: number, fileUrl: string, caption: string, type: string, threadId?: number) {
   const method = type === "image" ? "sendPhoto" : "sendDocument";
   const key = type === "image" ? "photo" : "document";
+  const payload: any = { chat_id: chatId, [key]: fileUrl, caption, parse_mode: "HTML" };
+  if (threadId) payload.message_thread_id = threadId;
   const res = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, [key]: fileUrl, caption, parse_mode: "HTML" }),
-    }
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
   );
   return res.json();
 }
@@ -61,11 +61,11 @@ async function getClient(chatId: number) {
   return data;
 }
 
-// ─── Get active conversations for client (numbered) ─────────
+// ─── Get active conversations for client ────────────────────
 async function getActiveConversations(clientId: string) {
   const { data } = await supabase
     .from("conversations")
-    .select("id, visitor_id, status, unread_count, last_message_at, visitors(full_name, whatsapp)")
+    .select("id, visitor_id, status, unread_count, last_message_at, telegram_topic_id, visitors(full_name, whatsapp)")
     .eq("client_id", clientId)
     .eq("status", "active")
     .order("last_message_at", { ascending: false })
@@ -73,14 +73,12 @@ async function getActiveConversations(clientId: string) {
   return data || [];
 }
 
-// ─── Get conversation by index ──────────────────────────────
 async function getConversationByIndex(clientId: string, index: number) {
   const convs = await getActiveConversations(clientId);
   if (index < 1 || index > convs.length) return null;
   return convs[index - 1];
 }
 
-// ─── Format time ago ────────────────────────────────────────
 function timeAgo(date: string) {
   const diff = Date.now() - new Date(date).getTime();
   const mins = Math.floor(diff / 60000);
@@ -88,37 +86,100 @@ function timeAgo(date: string) {
   if (mins < 60) return `il y a ${mins}min`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `il y a ${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `il y a ${days}j`;
+  return `il y a ${Math.floor(hours / 24)}j`;
 }
 
 // ═══════════════════════════════════════════════════════════
-//  /start
+//  FORUM TOPIC: Handle message in a topic → reply to visitor
 // ═══════════════════════════════════════════════════════════
-async function cmdStart(chatId: number) {
+async function handleTopicMessage(chatId: number, threadId: number, text: string) {
+  const { data: conv } = await supabase
+    .from("conversations")
+    .select("id, client_id, visitor_id, status")
+    .eq("telegram_topic_id", threadId)
+    .single();
+
+  if (!conv) return; // Unknown topic
+
+  const client = await getClient(chatId);
+  if (!client || client.id !== conv.client_id) return;
+
+  if (conv.status === "closed") {
+    await supabase.from("conversations").update({ status: "active" }).eq("id", conv.id);
+    await send(chatId, "🔄 Conversation rouverte.", { message_thread_id: threadId });
+  }
+
+  const { error } = await supabase.from("messages").insert({
+    conversation_id: conv.id,
+    sender_type: "client",
+    content: text,
+    content_type: "text",
+    is_read: false,
+  });
+
+  if (error) {
+    console.error("Topic reply error:", error);
+    await send(chatId, "❌ Erreur d'envoi.", { message_thread_id: threadId });
+    return;
+  }
+
+  await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conv.id);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  FORUM: Handle /fermer in topic
+// ═══════════════════════════════════════════════════════════
+async function handleTopicClose(chatId: number, threadId: number) {
+  const { data: conv } = await supabase
+    .from("conversations")
+    .select("id, visitors(full_name)")
+    .eq("telegram_topic_id", threadId)
+    .single();
+
+  if (!conv) return;
+
+  await supabase.from("conversations").update({ status: "closed" }).eq("id", conv.id);
+
+  const name = (conv as any).visitors?.full_name || "Visiteur";
+  await send(chatId, `✅ Conversation avec <b>${name}</b> fermée.`, { message_thread_id: threadId });
+
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/closeForumTopic`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, message_thread_id: threadId }),
+    });
+  } catch (e) { /* non-critical */ }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Commands
+// ═══════════════════════════════════════════════════════════
+async function cmdStart(chatId: number, threadId?: number) {
+  const opts: any = {};
+  if (threadId) opts.message_thread_id = threadId;
+
   await send(chatId,
     `🚀 <b>Bienvenue sur ifiChat !</b>\n\n` +
-    `Je vous permet de recevoir et répondre aux messages de chat de votre site web.\n\n` +
+    `Recevez et répondez aux messages de chat de votre site.\n\n` +
+    `<b>Mode Forum :</b> Chaque visiteur a son topic. Répondez directement dedans.\n\n` +
     `<b>Commandes :</b>\n` +
     `/active — Conversations actives\n` +
-    `/a1 — Historique conversation 1\n` +
-    `/r1 texte — Répondre à conversation 1\n` +
-    `/a1 fermer — Fermer conversation 1\n` +
     `/status — État du compte\n` +
     `/unlink — Délier Telegram\n` +
     `/help — Cette aide\n\n` +
-    `Ou faites <b>Reply</b> sur un message visiteur pour répondre directement.\n\n` +
-    `Pas encore lié ? Envoyez votre code <b>IFICHAT-XXXXXX</b> du dashboard.`
+    `Pas encore lié ? Envoyez votre code <b>IFICHAT-XXXXXX</b>.`,
+    opts
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  /status
-// ═══════════════════════════════════════════════════════════
-async function cmdStatus(chatId: number) {
+async function cmdStatus(chatId: number, threadId?: number) {
   const client = await getClient(chatId);
+  const opts: any = {};
+  if (threadId) opts.message_thread_id = threadId;
+
   if (!client) {
-    await send(chatId, "❌ Aucun compte lié.\nEnvoyez votre code <b>IFICHAT-XXXXXX</b> pour vous connecter.");
+    await send(chatId, "❌ Aucun compte lié.\nEnvoyez votre code <b>IFICHAT-XXXXXX</b>.", opts);
     return;
   }
 
@@ -132,36 +193,34 @@ async function cmdStatus(chatId: number) {
     .single();
 
   const convs = await getActiveConversations(client.id);
-
   const planLabel = sub?.plan === "yearly" ? "Annuel" : sub?.plan === "monthly" ? "Mensuel" : "Essai gratuit";
+  const mode = client.telegram_is_forum ? "Forum (groupe)" : "Privé (chat direct)";
 
   await send(chatId,
     `📊 <b>État de votre compte</b>\n\n` +
-    `👤 ${client.name}\n` +
-    `📧 ${client.email}\n` +
+    `👤 ${client.name}\n📧 ${client.email}\n` +
     `📋 Plan: ${planLabel}\n` +
     `${sub?.expires_at ? `📅 Expire: ${new Date(sub.expires_at).toLocaleDateString("fr-FR")}\n` : ""}` +
     `💬 ${convs.length} conversation(s) active(s)\n` +
-    `✅ Telegram: Connecté`
+    `📡 Mode: ${mode}\n✅ Telegram: Connecté`,
+    opts
   );
 }
 
-// ═══════════════════════════════════════════════════════════
-//  /active — Liste des conversations actives
-// ═══════════════════════════════════════════════════════════
-async function cmdActive(chatId: number) {
+async function cmdActive(chatId: number, threadId?: number) {
   const client = await getClient(chatId);
+  const opts: any = {};
+  if (threadId) opts.message_thread_id = threadId;
+
   if (!client) {
-    await send(chatId, "❌ Aucun compte lié.\nEnvoyez votre code <b>IFICHAT-XXXXXX</b>.");
+    await send(chatId, "❌ Aucun compte lié.", opts);
     return;
   }
 
   const convs = await getActiveConversations(client.id);
 
   if (convs.length === 0) {
-    await send(chatId,
-      "📋 <b>Aucune conversation active</b>\n\nLes messages de vos visiteurs apparaîtront ici."
-    );
+    await send(chatId, "📋 <b>Aucune conversation active</b>\n\nLes messages apparaîtront ici.", opts);
     return;
   }
 
@@ -171,50 +230,33 @@ async function cmdActive(chatId: number) {
     const c = convs[i] as any;
     const name = c.visitors?.full_name || "Visiteur";
     const phone = c.visitors?.whatsapp || "";
-    const unread = c.unread_count > 0 ? ` 🔴 ${c.unread_count} non lu(s)` : "";
+    const unread = c.unread_count > 0 ? ` 🔴 ${c.unread_count}` : "";
     const ago = timeAgo(c.last_message_at);
-
-    text += `<b>${i + 1}️⃣ ${name}</b>${phone ? ` — ${phone}` : ""}\n`;
-    text += `   💬 ${ago}${unread}\n\n`;
+    text += `<b>${i + 1}️⃣ ${name}</b>${phone ? ` — ${phone}` : ""}\n   💬 ${ago}${unread}\n\n`;
   }
 
-  text += `<b>Commandes :</b>\n`;
-  text += `/a1 — Voir historique\n`;
-  text += `/r1 bonjour — Répondre\n`;
-  text += `/a1 fermer — Fermer`;
+  if (client.telegram_is_forum) {
+    text += `💡 Ouvrez le topic du visiteur pour répondre.`;
+  } else {
+    text += `/a1 — Historique  •  /r1 texte — Répondre  •  /a1 fermer — Fermer`;
+  }
 
-  await send(chatId, text);
+  await send(chatId, text, opts);
 }
 
-// ═══════════════════════════════════════════════════════════
-//  /a1, /a2... — Historique d'une conversation
-// ═══════════════════════════════════════════════════════════
 async function cmdViewConversation(chatId: number, index: number, extra: string) {
   const client = await getClient(chatId);
-  if (!client) {
-    await send(chatId, "❌ Aucun compte lié.");
-    return;
-  }
+  if (!client) { await send(chatId, "❌ Aucun compte lié."); return; }
 
   const conv = await getConversationByIndex(client.id, index);
-  if (!conv) {
-    await send(chatId, `⚠️ Conversation ${index} introuvable.\nTapez /active pour voir la liste.`);
-    return;
-  }
+  if (!conv) { await send(chatId, `⚠️ Conversation ${index} introuvable.\n/active`); return; }
 
-  // Handle /a1 fermer
   if (extra.trim().toLowerCase() === "fermer") {
-    await supabase
-      .from("conversations")
-      .update({ status: "closed" })
-      .eq("id", conv.id);
-
-    const name = (conv as any).visitors?.full_name || "Visiteur";
-    await send(chatId, `✅ Conversation avec <b>${name}</b> fermée.`);
+    await supabase.from("conversations").update({ status: "closed" }).eq("id", conv.id);
+    await send(chatId, `✅ Conversation avec <b>${(conv as any).visitors?.full_name || "Visiteur"}</b> fermée.`);
     return;
   }
 
-  // Get messages
   const { data: messages } = await supabase
     .from("messages")
     .select("sender_type, content, content_type, file_name, created_at")
@@ -224,84 +266,46 @@ async function cmdViewConversation(chatId: number, index: number, extra: string)
 
   const c = conv as any;
   const name = c.visitors?.full_name || "Visiteur";
-  const phone = c.visitors?.whatsapp || "";
+  let text = `📖 <b>${name}</b>${c.visitors?.whatsapp ? ` — ${c.visitors.whatsapp}` : ""}\n\n`;
 
-  let text = `📖 <b>Conversation avec ${name}</b>\n`;
-  if (phone) text += `📱 ${phone}\n`;
-  text += `\n`;
-
-  if (!messages || messages.length === 0) {
+  if (!messages?.length) {
     text += "<i>Aucun message</i>\n";
   } else {
     for (const m of messages) {
       const icon = m.sender_type === "visitor" ? "👤" : "✅";
-      const sender = m.sender_type === "visitor" ? name : "Vous";
       const time = new Date(m.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-
-      if (m.content_type === "text") {
-        text += `${icon} <b>${sender}</b> [${time}]\n${m.content}\n\n`;
-      } else if (m.content_type === "image") {
-        text += `${icon} <b>${sender}</b> [${time}]\n📸 Photo${m.content ? ` — ${m.content}` : ""}\n\n`;
-      } else {
-        text += `${icon} <b>${sender}</b> [${time}]\n📎 ${m.file_name || "Fichier"}\n\n`;
-      }
+      text += m.content_type === "text"
+        ? `${icon} [${time}] ${m.content}\n`
+        : `${icon} [${time}] 📎 ${m.file_name || "Fichier"}\n`;
     }
   }
 
-  text += `\n➡️ <b>Répondre :</b> /r${index} votre message`;
-
+  text += `\n➡️ /r${index} votre message`;
   await send(chatId, text);
 }
 
-// ═══════════════════════════════════════════════════════════
-//  /r1 texte — Répondre à une conversation
-// ═══════════════════════════════════════════════════════════
 async function cmdReply(chatId: number, index: number, message: string) {
   const client = await getClient(chatId);
-  if (!client) {
-    await send(chatId, "❌ Aucun compte lié.");
-    return;
-  }
-
-  if (!message.trim()) {
-    await send(chatId, `⚠️ Usage: /r${index} votre message ici`);
-    return;
-  }
+  if (!client) { await send(chatId, "❌ Aucun compte lié."); return; }
+  if (!message.trim()) { await send(chatId, `⚠️ /r${index} votre message`); return; }
 
   const conv = await getConversationByIndex(client.id, index);
-  if (!conv) {
-    await send(chatId, `⚠️ Conversation ${index} introuvable.\nTapez /active pour voir la liste.`);
-    return;
-  }
+  if (!conv) { await send(chatId, `⚠️ Conversation ${index} introuvable.\n/active`); return; }
 
-  // Insert reply
-  const { error } = await supabase
-    .from("messages")
-    .insert({
-      conversation_id: conv.id,
-      sender_type: "client",
-      content: message.trim(),
-      content_type: "text",
-      is_read: false,
-    });
+  const { error } = await supabase.from("messages").insert({
+    conversation_id: conv.id, sender_type: "client", content: message.trim(), content_type: "text", is_read: false,
+  });
 
-  if (error) {
-    console.error("Reply insert error:", error);
-    await send(chatId, "❌ Erreur lors de l'envoi. Réessayez.");
-    return;
-  }
+  if (error) { await send(chatId, "❌ Erreur. Réessayez."); return; }
 
-  // Reset unread
   await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conv.id);
-
-  const name = (conv as any).visitors?.full_name || "Visiteur";
-  await send(chatId, `✅ Message envoyé à <b>${name}</b>`);
+  await send(chatId, `✅ Envoyé à <b>${(conv as any).visitors?.full_name || "Visiteur"}</b>`);
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Link code handler
+//  Link code — detects group vs private
 // ═══════════════════════════════════════════════════════════
-async function handleLinkCode(chatId: number, code: string) {
+async function handleLinkCode(chatId: number, code: string, chatType: string) {
   const { data: client, error } = await supabase
     .from("clients")
     .select("id, name, email")
@@ -309,142 +313,125 @@ async function handleLinkCode(chatId: number, code: string) {
     .single();
 
   if (error || !client) {
-    await send(chatId, "❌ <b>Code invalide</b>\n\nRendez-vous sur votre dashboard ifiChat pour obtenir votre code.");
+    await send(chatId, "❌ <b>Code invalide</b>\n\nAllez sur votre dashboard ifiChat pour le code.");
     return;
   }
+
+  const isForum = chatType === "supergroup";
 
   const { error: updateError } = await supabase
     .from("clients")
-    .update({ telegram_chat_id: chatId, telegram_linked: true, telegram_link_code: null })
+    .update({
+      telegram_chat_id: chatId, telegram_linked: true,
+      telegram_link_code: null, telegram_is_forum: isForum,
+    })
     .eq("id", client.id);
 
-  if (updateError) {
-    await send(chatId, "❌ Erreur lors de la liaison. Réessayez.");
-    return;
-  }
+  if (updateError) { await send(chatId, "❌ Erreur. Réessayez."); return; }
+
+  const modeText = isForum
+    ? `📡 <b>Mode Forum activé !</b>\nChaque visiteur aura son propre topic.\nRépondez directement dans le topic.`
+    : `📡 <b>Mode privé</b>\nUtilisez /active, /r1 ou Reply pour répondre.`;
 
   await send(chatId,
-    `✅ <b>Compte lié avec succès !</b>\n\n` +
-    `👤 ${client.name}\n📧 ${client.email}\n\n` +
-    `🔔 Vous recevrez les messages de vos visiteurs ici.\n\n` +
-    `<b>Commandes utiles :</b>\n` +
-    `/active — Conversations actives\n` +
-    `/a1 — Voir historique conversation 1\n` +
-    `/r1 texte — Répondre\n` +
-    `/status — État du compte\n` +
-    `/unlink — Délier Telegram\n\n` +
-    `Ou faites <b>Reply</b> sur un message visiteur pour répondre directement.`
+    `✅ <b>Compte lié !</b>\n\n👤 ${client.name}\n📧 ${client.email}\n\n${modeText}\n\n` +
+    `/active — Conversations  •  /status — État  •  /unlink — Délier`
   );
 
-  // Dashboard notification
-  await addNotification(
-    client.id, "telegram_linked",
-    "Telegram connecté ✅",
-    "Votre bot Telegram est lié. Vous recevrez les messages de vos visiteurs directement sur Telegram.",
+  await addNotification(client.id, "telegram_linked",
+    isForum ? "Telegram Forum connecté ✅" : "Telegram connecté ✅",
+    isForum ? "Mode Forum activé. Chaque visiteur aura son propre topic." : "Bot Telegram lié en mode privé.",
     "/dashboard"
   );
 
-  // Email notification
   const tgEmail = emailTemplates.telegramLinked(client.name);
   await sendEmail(client.email, tgEmail.subject, tgEmail.body);
 
-  // Notify admin
   try {
     const { data: admin } = await supabase
-      .from("clients")
-      .select("telegram_chat_id, telegram_linked")
-      .eq("is_admin", true)
-      .eq("telegram_linked", true)
-      .neq("id", client.id)
-      .limit(1)
-      .single();
+      .from("clients").select("telegram_chat_id, telegram_linked")
+      .eq("is_admin", true).eq("telegram_linked", true).neq("id", client.id).limit(1).single();
 
     if (admin?.telegram_chat_id) {
       await send(admin.telegram_chat_id,
-        `🔗 <b>Nouveau Telegram lié</b>\n\n👤 ${client.name}\n📧 ${client.email}`
+        `🔗 <b>Nouveau Telegram lié</b>\n👤 ${client.name}\n📡 ${isForum ? "Forum" : "Privé"}`
       );
     }
-  } catch (e) { /* skip */ }
+  } catch (e) {}
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Reply handler (Telegram Reply)
+//  Reply handler (private chat)
 // ═══════════════════════════════════════════════════════════
 async function handleReply(chatId: number, replyToMessageId: number, text: string) {
-  // Find original message
   const { data: originalMsg } = await supabase
-    .from("messages")
-    .select("id, conversation_id")
-    .eq("telegram_message_id", replyToMessageId)
-    .single();
+    .from("messages").select("id, conversation_id")
+    .eq("telegram_message_id", replyToMessageId).single();
 
-  let conversationId: string | null = null;
+  let conversationId: string | null = originalMsg?.conversation_id || null;
 
-  if (originalMsg) {
-    conversationId = originalMsg.conversation_id;
-  } else {
-    // Try notification log
+  if (!conversationId) {
     const { data: notifLog } = await supabase
-      .from("notifications_log")
-      .select("message_id")
-      .eq("telegram_message_id", replyToMessageId)
-      .single();
+      .from("notifications_log").select("message_id")
+      .eq("telegram_message_id", replyToMessageId).single();
 
     if (notifLog?.message_id) {
       const { data: msg } = await supabase
-        .from("messages")
-        .select("conversation_id")
-        .eq("id", notifLog.message_id)
-        .single();
+        .from("messages").select("conversation_id").eq("id", notifLog.message_id).single();
       conversationId = msg?.conversation_id || null;
     }
   }
 
   if (!conversationId) {
-    await send(chatId,
-      "⚠️ Conversation non trouvée.\n\n" +
-      "Utilisez /active puis /r1 pour répondre, ou faites Reply sur un message visiteur."
-    );
+    await send(chatId, "⚠️ Conversation non trouvée.\n/active puis /r1 pour répondre.");
     return;
   }
 
-  // Verify ownership
-  const { data: conv } = await supabase
-    .from("conversations")
-    .select("id, client_id")
-    .eq("id", conversationId)
-    .single();
-
+  const { data: conv } = await supabase.from("conversations").select("id, client_id").eq("id", conversationId).single();
   if (!conv) return;
 
-  const { data: client } = await supabase
-    .from("clients")
-    .select("id")
-    .eq("telegram_chat_id", chatId)
-    .eq("id", conv.client_id)
-    .single();
+  const { data: client } = await supabase.from("clients").select("id")
+    .eq("telegram_chat_id", chatId).eq("id", conv.client_id).single();
 
-  if (!client) {
-    await send(chatId, "⚠️ Vous n'avez pas accès à cette conversation.");
-    return;
-  }
+  if (!client) { await send(chatId, "⚠️ Pas accès à cette conversation."); return; }
 
-  // Insert reply
   const { error } = await supabase.from("messages").insert({
-    conversation_id: conversationId,
-    sender_type: "client",
-    content: text,
-    content_type: "text",
-    is_read: false,
+    conversation_id: conversationId, sender_type: "client", content: text, content_type: "text", is_read: false,
   });
 
-  if (error) {
-    await send(chatId, "❌ Erreur. Réessayez.");
-    return;
-  }
+  if (error) { await send(chatId, "❌ Erreur."); return; }
 
   await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conversationId);
-  await send(chatId, "✅ Message envoyé !");
+  await send(chatId, "✅ Envoyé !");
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Unlink
+// ═══════════════════════════════════════════════════════════
+async function cmdUnlink(chatId: number, threadId?: number) {
+  const client = await getClient(chatId);
+  const opts: any = {};
+  if (threadId) opts.message_thread_id = threadId;
+
+  if (!client) { await send(chatId, "❌ Aucun compte lié.", opts); return; }
+
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let newCode = "IFICHAT-";
+  for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
+
+  await supabase.from("clients").update({
+    telegram_linked: false, telegram_chat_id: null,
+    telegram_link_code: newCode, telegram_is_forum: false,
+  }).eq("id", client.id);
+
+  await send(chatId,
+    `🔓 <b>Compte délié</b>\n\n${client.name}, Telegram déconnecté.\nNouveau code dans le dashboard.`,
+    opts
+  );
+
+  await addNotification(client.id, "telegram_unlinked",
+    "Telegram déconnecté", "Bot délié. Reconnectez depuis l'onglet Telegram.", "/dashboard"
+  );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -459,114 +446,89 @@ serve(async (req) => {
     if (!message) return new Response("OK", { status: 200 });
 
     const chatId = message.chat.id;
+    const chatType = message.chat.type;
     const text = (message.text || "").trim();
     const textLower = text.toLowerCase();
+    const threadId = message.message_thread_id || null;
+    const isTopicMessage = message.is_topic_message || false;
 
-    // ─── Commands ───────────────────────────────────
-    if (textLower === "/start" || textLower === "/help") {
-      await cmdStart(chatId);
-      return new Response("OK", { status: 200 });
-    }
-
-    if (textLower === "/status") {
-      await cmdStatus(chatId);
-      return new Response("OK", { status: 200 });
-    }
-
-    if (textLower === "/active") {
-      await cmdActive(chatId);
-      return new Response("OK", { status: 200 });
-    }
-
-    if (textLower === "/unlink") {
-      const client = await getClient(chatId);
-      if (!client) {
-        await send(chatId, "❌ Aucun compte lié.");
+    // ─── FORUM: message in a visitor topic ──────────
+    if (chatType === "supergroup" && isTopicMessage && threadId) {
+      if (textLower === "/fermer" || textLower === "/close") {
+        await handleTopicClose(chatId, threadId);
         return new Response("OK", { status: 200 });
       }
-      // Generate new link code
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-      let newCode = "IFICHAT-";
-      for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
 
-      await supabase.from("clients").update({
-        telegram_linked: false,
-        telegram_chat_id: null,
-        telegram_link_code: newCode,
-      }).eq("id", client.id);
+      // Commands in topics
+      if (textLower === "/start" || textLower === "/help") { await cmdStart(chatId, threadId); return new Response("OK"); }
+      if (textLower === "/status") { await cmdStatus(chatId, threadId); return new Response("OK"); }
+      if (textLower === "/active") { await cmdActive(chatId, threadId); return new Response("OK"); }
+      if (textLower === "/unlink") { await cmdUnlink(chatId, threadId); return new Response("OK"); }
 
-      await send(chatId,
-        `🔓 <b>Compte délié</b>\n\n` +
-        `${client.name}, votre Telegram a été déconnecté d'ifiChat.\n` +
-        `Vous ne recevrez plus les messages ici.\n\n` +
-        `Pour reconnecter, utilisez le nouveau code dans votre dashboard.`
-      );
+      if (text.toUpperCase().startsWith("IFICHAT-")) {
+        await handleLinkCode(chatId, text, chatType);
+        return new Response("OK");
+      }
 
-      // Dashboard notification
-      await addNotification(
-        client.id, "telegram_unlinked",
-        "Telegram déconnecté",
-        "Votre bot Telegram a été délié. Reconnectez-le depuis l'onglet Telegram.",
-        "/dashboard"
-      );
+      // Regular text → reply to visitor in this topic
+      if (text && !text.startsWith("/")) {
+        await handleTopicMessage(chatId, threadId, text);
+      }
+      return new Response("OK", { status: 200 });
+    }
+
+    // ─── SUPERGROUP General (no topic) ──────────────
+    if (chatType === "supergroup" || chatType === "group") {
+      if (textLower === "/start" || textLower === "/help") { await cmdStart(chatId); return new Response("OK"); }
+      if (textLower === "/status") { await cmdStatus(chatId); return new Response("OK"); }
+      if (textLower === "/active") { await cmdActive(chatId); return new Response("OK"); }
+      if (textLower === "/unlink") { await cmdUnlink(chatId); return new Response("OK"); }
+
+      if (text.toUpperCase().startsWith("IFICHAT-")) {
+        await handleLinkCode(chatId, text, chatType);
+        return new Response("OK");
+      }
+
+      const aMatch = textLower.match(/^\/a(\d+)\s*(.*)?$/);
+      if (aMatch) { await cmdViewConversation(chatId, parseInt(aMatch[1]), aMatch[2] || ""); return new Response("OK"); }
+
+      const rMatch = text.match(/^\/r(\d+)\s+(.+)$/is);
+      if (rMatch) { await cmdReply(chatId, parseInt(rMatch[1]), rMatch[2]); return new Response("OK"); }
 
       return new Response("OK", { status: 200 });
     }
 
-    // /a1, /a2, /a3... (with optional "fermer")
+    // ─── PRIVATE CHAT ───────────────────────────────
+    if (textLower === "/start" || textLower === "/help") { await cmdStart(chatId); return new Response("OK"); }
+    if (textLower === "/status") { await cmdStatus(chatId); return new Response("OK"); }
+    if (textLower === "/active") { await cmdActive(chatId); return new Response("OK"); }
+    if (textLower === "/unlink") { await cmdUnlink(chatId); return new Response("OK"); }
+
     const aMatch = textLower.match(/^\/a(\d+)\s*(.*)?$/);
-    if (aMatch) {
-      const index = parseInt(aMatch[1]);
-      const extra = aMatch[2] || "";
-      await cmdViewConversation(chatId, index, extra);
-      return new Response("OK", { status: 200 });
-    }
+    if (aMatch) { await cmdViewConversation(chatId, parseInt(aMatch[1]), aMatch[2] || ""); return new Response("OK"); }
 
-    // /r1 message, /r2 message...
     const rMatch = text.match(/^\/r(\d+)\s+(.+)$/is);
-    if (rMatch) {
-      const index = parseInt(rMatch[1]);
-      const replyText = rMatch[2];
-      await cmdReply(chatId, index, replyText);
-      return new Response("OK", { status: 200 });
-    }
+    if (rMatch) { await cmdReply(chatId, parseInt(rMatch[1]), rMatch[2]); return new Response("OK"); }
 
-    // /r1 without message
     const rNoMsg = textLower.match(/^\/r(\d+)$/);
-    if (rNoMsg) {
-      await send(chatId, `⚠️ Usage: /r${rNoMsg[1]} votre message ici`);
-      return new Response("OK", { status: 200 });
-    }
+    if (rNoMsg) { await send(chatId, `⚠️ /r${rNoMsg[1]} votre message`); return new Response("OK"); }
 
-    // ─── Link code ──────────────────────────────────
     if (text.toUpperCase().startsWith("IFICHAT-")) {
-      await handleLinkCode(chatId, text);
-      return new Response("OK", { status: 200 });
+      await handleLinkCode(chatId, text, chatType);
+      return new Response("OK");
     }
 
-    // ─── Reply to message ───────────────────────────
     if (message.reply_to_message) {
       await handleReply(chatId, message.reply_to_message.message_id, text);
-      return new Response("OK", { status: 200 });
+      return new Response("OK");
     }
 
-    // ─── Unknown ────────────────────────────────────
+    // Unknown
     const client = await getClient(chatId);
     if (client) {
-      await send(chatId,
-        "💡 <b>Commandes disponibles :</b>\n\n" +
-        "/active — Voir vos conversations\n" +
-        "/a1 — Historique conversation 1\n" +
-        "/r1 texte — Répondre\n" +
-        "/status — État du compte\n" +
-        "/unlink — Délier Telegram\n\n" +
-        "Ou faites <b>Reply</b> sur un message visiteur."
-      );
+      await send(chatId, "💡 /active — Conversations  •  /r1 texte — Répondre  •  /status — État\nOu <b>Reply</b> sur un message.");
     } else {
-      await send(chatId,
-        "👋 Envoyez votre code <b>IFICHAT-XXXXXX</b> pour connecter votre compte.\n\n" +
-        "Pas encore inscrit ? → https://chat.ifiaas.com"
-      );
+      await send(chatId, "👋 Envoyez <b>IFICHAT-XXXXXX</b> pour connecter.\nhttps://chat.ifiaas.com");
     }
 
     return new Response("OK", { status: 200 });

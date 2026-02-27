@@ -26,55 +26,61 @@ const corsHeaders = {
 };
 
 // ─── Telegram helpers ───────────────────────────────────────
-async function sendTelegram(chatId: number, text: string) {
+async function sendTelegram(chatId: number, text: string, threadId?: number | null) {
+  const payload: any = { chat_id: chatId, text, parse_mode: "HTML" };
+  if (threadId) payload.message_thread_id = threadId;
   const res = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML",
-      }),
-    }
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
   );
-  const data = await res.json();
-  return data;
+  return res.json();
 }
 
-async function sendTelegramPhoto(chatId: number, photoUrl: string, caption: string) {
+async function sendTelegramPhoto(chatId: number, photoUrl: string, caption: string, threadId?: number | null) {
+  const payload: any = { chat_id: chatId, photo: photoUrl, caption, parse_mode: "HTML" };
+  if (threadId) payload.message_thread_id = threadId;
   const res = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        photo: photoUrl,
-        caption,
-        parse_mode: "HTML",
-      }),
-    }
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
   );
   return res.json();
 }
 
-async function sendTelegramDocument(chatId: number, docUrl: string, caption: string) {
+async function sendTelegramDocument(chatId: number, docUrl: string, caption: string, threadId?: number | null) {
+  const payload: any = { chat_id: chatId, document: docUrl, caption, parse_mode: "HTML" };
+  if (threadId) payload.message_thread_id = threadId;
   const res = await fetch(
     `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        document: docUrl,
-        caption,
-        parse_mode: "HTML",
-      }),
-    }
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
   );
   return res.json();
+}
+
+// ─── Create Telegram Forum Topic ────────────────────────────
+async function createForumTopic(chatId: number, name: string): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/createForumTopic`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          name: name.substring(0, 128), // Telegram limit
+          icon_color: 0x6FB9F0, // Blue
+        }),
+      }
+    );
+    const data = await res.json();
+    if (data.ok && data.result?.message_thread_id) {
+      return data.result.message_thread_id;
+    }
+    console.error("createForumTopic failed:", data);
+    return null;
+  } catch (e) {
+    console.error("createForumTopic error:", e);
+    return null;
+  }
 }
 
 // ─── Verify client subscription is active ───────────────────
@@ -240,17 +246,39 @@ async function startConversation(body: any, clientId: string) {
   // Notify client on Telegram about new conversation
   const { data: client } = await supabase
     .from("clients")
-    .select("telegram_chat_id, telegram_linked, domain")
+    .select("telegram_chat_id, telegram_linked, telegram_is_forum, domain")
     .eq("id", clientId)
     .single();
 
   if (client?.telegram_linked && client?.telegram_chat_id) {
-    await sendTelegram(client.telegram_chat_id,
+    let topicId: number | null = null;
+
+    // If client uses a forum group, create a topic for this visitor
+    if (client.telegram_is_forum) {
+      topicId = await createForumTopic(
+        client.telegram_chat_id,
+        `💬 ${fullName} — ${whatsapp || "visiteur"}`
+      );
+
+      if (topicId) {
+        // Store topic_id in conversation
+        await supabase
+          .from("conversations")
+          .update({ telegram_topic_id: topicId })
+          .eq("id", conversation.id);
+      }
+    }
+
+    await sendTelegram(
+      client.telegram_chat_id,
       `🆕 <b>Nouvelle conversation</b>\n\n` +
       `👤 ${fullName}\n` +
       `📱 ${whatsapp}\n` +
       `🌐 ${client.domain || "votre site"}\n\n` +
-      `Le visiteur vient d'ouvrir le chat.`
+      (client.telegram_is_forum
+        ? `Répondez directement ici dans ce topic.`
+        : `Le visiteur vient d'ouvrir le chat.\nFaites <b>Reply</b> ou /active pour voir.`),
+      topicId
     );
   }
 
@@ -325,13 +353,38 @@ async function sendMessage(body: any, clientId: string) {
   // Notify client on Telegram
   const { data: client } = await supabase
     .from("clients")
-    .select("telegram_chat_id, telegram_linked, domain")
+    .select("telegram_chat_id, telegram_linked, telegram_is_forum, domain")
     .eq("id", clientId)
     .single();
 
   let telegramMessageId = null;
 
   if (client?.telegram_linked && client?.telegram_chat_id) {
+    // Get conversation's topic_id if forum mode
+    let topicId: number | null = null;
+    if (client.telegram_is_forum) {
+      const { data: conv } = await supabase
+        .from("conversations")
+        .select("telegram_topic_id")
+        .eq("id", conversationId)
+        .single();
+      topicId = conv?.telegram_topic_id || null;
+
+      // If no topic yet (old conversation), create one
+      if (!topicId) {
+        topicId = await createForumTopic(
+          client.telegram_chat_id,
+          `💬 ${visitor?.full_name || "Visiteur"} — ${visitor?.whatsapp || ""}`
+        );
+        if (topicId) {
+          await supabase
+            .from("conversations")
+            .update({ telegram_topic_id: topicId })
+            .eq("id", conversationId);
+        }
+      }
+    }
+
     let tgResult;
 
     if (contentType === "image" && fileUrl) {
@@ -340,8 +393,8 @@ async function sendMessage(body: any, clientId: string) {
         fileUrl,
         `📸 <b>Photo de ${visitor?.full_name || "Visiteur"}</b>\n` +
         `📱 ${visitor?.whatsapp || ""}\n` +
-        `🌐 ${client.domain || "votre site"}\n\n` +
-        `➡️ Faites Reply pour répondre`
+        (client.telegram_is_forum ? "" : `\n➡️ Faites Reply pour répondre`),
+        topicId
       );
     } else if (contentType === "file" && fileUrl) {
       tgResult = await sendTelegramDocument(
@@ -349,17 +402,19 @@ async function sendMessage(body: any, clientId: string) {
         fileUrl,
         `📎 <b>Fichier de ${visitor?.full_name || "Visiteur"}</b>\n` +
         `📄 ${fileName || "fichier"}\n` +
-        `📱 ${visitor?.whatsapp || ""}\n\n` +
-        `➡️ Faites Reply pour répondre`
+        (client.telegram_is_forum ? "" : `\n➡️ Faites Reply pour répondre`),
+        topicId
       );
     } else {
-      tgResult = await sendTelegram(
-        client.telegram_chat_id,
-        `💬 <b>${visitor?.full_name || "Visiteur"}</b> — ${client.domain || "votre site"}\n` +
-        `📱 ${visitor?.whatsapp || ""}\n\n` +
-        `${content}\n\n` +
-        `➡️ Faites Reply pour répondre`
-      );
+      // In forum mode, just send the content directly (no need for headers)
+      const msgText = client.telegram_is_forum
+        ? `${content}`
+        : `💬 <b>${visitor?.full_name || "Visiteur"}</b> — ${client.domain || "votre site"}\n` +
+          `📱 ${visitor?.whatsapp || ""}\n\n` +
+          `${content}\n\n` +
+          `➡️ Faites Reply pour répondre`;
+
+      tgResult = await sendTelegram(client.telegram_chat_id, msgText, topicId);
     }
 
     telegramMessageId = tgResult?.result?.message_id || null;
