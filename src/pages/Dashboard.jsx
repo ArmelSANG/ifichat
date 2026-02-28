@@ -86,9 +86,21 @@ export default function Dashboard() {
         .order('last_message_at', { ascending: false })
         .limit(50);
       if (error) {
-        console.warn('Load conversations error:', error.message);
-        // Session might be stale — refresh
-        await supabase.auth.getSession();
+        console.warn('Load conversations error — refreshing session...', error.message);
+        const { error: refreshErr } = await supabase.auth.refreshSession();
+        if (refreshErr) {
+          console.error('Session refresh failed — redirecting to login');
+          window.location.href = '/';
+          return;
+        }
+        // Retry once after refresh
+        const { data: retryData } = await supabase
+          .from('conversations')
+          .select('*, visitors(full_name, whatsapp)')
+          .eq('client_id', client.id)
+          .order('last_message_at', { ascending: false })
+          .limit(50);
+        setConversations(retryData || []);
         return;
       }
       setConversations(data || []);
@@ -102,26 +114,33 @@ export default function Dashboard() {
     if (!selectedConv) { setChatMessages([]); return; }
     setChatLoading(true);
 
-    // Load with error handling + timeout
-    const loadMessages = () => {
-      supabase
+    // Load with error handling + auto-refresh
+    const loadMessages = async () => {
+      const { data, error } = await supabase
         .from('messages')
         .select('*')
         .eq('conversation_id', selectedConv.id)
         .order('created_at', { ascending: true })
-        .limit(200)
-        .then(({ data, error }) => {
-          if (error) {
-            console.warn('Load messages error:', error.message);
-            // Session may have expired — try refreshing
-            supabase.auth.getSession();
-          }
-          setChatMessages(data || []);
-          setChatLoading(false);
-        })
-        .catch(() => { setChatLoading(false); });
+        .limit(200);
+      
+      if (error) {
+        console.warn('Load messages error — refreshing session...', error.message);
+        const { error: refreshErr } = await supabase.auth.refreshSession();
+        if (!refreshErr) {
+          // Retry once
+          const { data: retryData } = await supabase
+            .from('messages').select('*')
+            .eq('conversation_id', selectedConv.id)
+            .order('created_at', { ascending: true }).limit(200);
+          setChatMessages(retryData || []);
+        }
+        setChatLoading(false);
+        return;
+      }
+      setChatMessages(data || []);
+      setChatLoading(false);
     };
-    loadMessages();
+    loadMessages().catch(() => setChatLoading(false));
 
     // Safety: force loading=false after 8s no matter what
     const safetyTimeout = setTimeout(() => setChatLoading(false), 8000);
@@ -155,8 +174,8 @@ export default function Dashboard() {
           if (error) {
             pollErrors++;
             if (pollErrors >= 3) {
-              // Session likely expired — refresh
-              supabase.auth.getSession();
+              // Session likely expired — force refresh
+              supabase.auth.refreshSession().catch(() => {});
               pollErrors = 0;
             }
             return;
@@ -309,6 +328,48 @@ export default function Dashboard() {
     setSelectedConv(null);
     loadConversations();
     showToast('Conversation fermée (suppression auto dans 6h)', 'success');
+  }
+
+  async function deleteConversation(convId, skipConfirm = false) {
+    if (!skipConfirm && !window.confirm('Supprimer cette conversation et tous ses messages ?')) return;
+    try {
+      // Delete files from storage
+      const { data: files } = await supabase
+        .from('messages').select('file_url')
+        .eq('conversation_id', convId)
+        .not('file_url', 'is', null);
+      if (files) {
+        const paths = files
+          .map(f => f.file_url?.replace(/.*\/storage\/v1\/object\/public\/chat-files\//, ''))
+          .filter(Boolean);
+        if (paths.length > 0) {
+          await supabase.storage.from('chat-files').remove(paths).catch(() => {});
+        }
+      }
+      // Delete messages then conversation
+      await supabase.from('messages').delete().eq('conversation_id', convId);
+      await supabase.from('conversations').delete().eq('id', convId);
+    } catch (e) { console.error('Delete error:', e); }
+    if (selectedConv?.id === convId) setSelectedConv(null);
+    loadConversations();
+    if (!skipConfirm) showToast('Conversation supprimée', 'success');
+  }
+
+  async function deleteAllConversations() {
+    if (!window.confirm(`Supprimer les ${conversations.length} conversations et tous les messages/fichiers ?`)) return;
+    if (!window.confirm('⚠️ Cette action est IRRÉVERSIBLE. Confirmer ?')) return;
+    showToast('Suppression en cours...', 'success');
+    try {
+      for (const c of conversations) {
+        await deleteConversation(c.id, true);
+      }
+      setSelectedConv(null);
+      showToast(`${conversations.length} conversations supprimées`, 'success');
+      loadConversations();
+    } catch (e) {
+      console.error('Delete all error:', e);
+      showToast('Erreur lors de la suppression', 'error');
+    }
   }
 
   const widgetDefaults = {
@@ -506,6 +567,13 @@ export default function Dashboard() {
               background: 'none', border: '1px solid #fca5a5', borderRadius: 8,
               padding: '6px 14px', fontSize: 12, color: '#dc2626', cursor: 'pointer', fontFamily: 'inherit',
             }}>Fermer</button>
+            <button onClick={() => deleteConversation(selectedConv.id)} style={{
+              background: '#dc2626', border: 'none', borderRadius: 8,
+              padding: '6px 12px', fontSize: 12, color: '#fff', cursor: 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: 4,
+            }} title="Supprimer définitivement">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1.5 14a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+            </button>
           </div>
 
           {/* Messages */}
@@ -631,50 +699,75 @@ export default function Dashboard() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>{conversations.length} conversation(s)</h3>
+          <button onClick={deleteAllConversations} style={{
+            background: 'none', border: '1px solid #fca5a5', borderRadius: 8,
+            padding: '5px 12px', fontSize: 11, color: '#dc2626', cursor: 'pointer',
+            fontFamily: 'inherit', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1.5 14a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2L5 6"/></svg>
+            Tout supprimer
+          </button>
         </div>
         {conversations.map(c => {
           const name = c.visitors?.full_name || 'Visiteur';
           const unread = c.unread_count > 0;
           // Last message preview
           return (
-            <div key={c.id} onClick={() => setSelectedConv(c)} style={{
+            <div key={c.id} style={{
               background: '#fff', borderRadius: 14, padding: '14px 16px',
               border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 14,
-              cursor: 'pointer', transition: 'all 0.15s',
+              transition: 'all 0.15s', position: 'relative',
             }}
               onMouseEnter={e => { e.currentTarget.style.background = '#f8f9fa'; e.currentTarget.style.borderColor = '#d1d5db'; }}
               onMouseLeave={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#f0f0f0'; }}
             >
-              <div style={{
-                width: 44, height: 44, borderRadius: 12,
-                background: `linear-gradient(135deg, hsl(${(name.charCodeAt(0)) * 7}, 50%, 55%), hsl(${(name.charCodeAt(0)) * 7 + 30}, 40%, 45%))`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontWeight: 700, fontSize: 16, flexShrink: 0,
-              }}>{name.charAt(0)}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: unread ? 700 : 600, fontSize: 14, color: '#111' }}>{name}</div>
-                <div style={{ fontSize: 12, color: '#667781', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {c.visitors?.whatsapp || ''}
+              <div onClick={() => setSelectedConv(c)} style={{
+                display: 'flex', alignItems: 'center', gap: 14, flex: 1, cursor: 'pointer', minWidth: 0,
+              }}>
+                <div style={{
+                  width: 44, height: 44, borderRadius: 12,
+                  background: `linear-gradient(135deg, hsl(${(name.charCodeAt(0)) * 7}, 50%, 55%), hsl(${(name.charCodeAt(0)) * 7 + 30}, 40%, 45%))`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#fff', fontWeight: 700, fontSize: 16, flexShrink: 0,
+                }}>{name.charAt(0)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: unread ? 700 : 600, fontSize: 14, color: '#111' }}>{name}</div>
+                  <div style={{ fontSize: 12, color: '#667781', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.visitors?.whatsapp || ''}
+                  </div>
                 </div>
               </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 11, color: unread ? '#0D9488' : '#bbb', fontWeight: unread ? 600 : 400, marginBottom: 4 }}>
-                  {c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}
+              <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: unread ? '#0D9488' : '#bbb', fontWeight: unread ? 600 : 400, marginBottom: 4 }}>
+                    {c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </div>
+                  {unread && (
+                    <span style={{
+                      display: 'inline-block', minWidth: 20, height: 20, lineHeight: '20px',
+                      borderRadius: 10, background: '#0D9488', color: '#fff',
+                      fontSize: 11, fontWeight: 700, textAlign: 'center', padding: '0 5px',
+                    }}>{c.unread_count}</span>
+                  )}
+                  {!unread && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 6,
+                      background: c.status === 'active' ? '#ecfdf5' : '#fef2f2',
+                      color: c.status === 'active' ? '#059669' : '#dc2626',
+                    }}>{c.status === 'active' ? 'Actif' : 'Fermé'}</span>
+                  )}
                 </div>
-                {unread && (
-                  <span style={{
-                    display: 'inline-block', minWidth: 20, height: 20, lineHeight: '20px',
-                    borderRadius: 10, background: '#0D9488', color: '#fff',
-                    fontSize: 11, fontWeight: 700, textAlign: 'center', padding: '0 5px',
-                  }}>{c.unread_count}</span>
-                )}
-                {!unread && (
-                  <span style={{
-                    fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 6,
-                    background: c.status === 'active' ? '#ecfdf5' : '#fef2f2',
-                    color: c.status === 'active' ? '#059669' : '#dc2626',
-                  }}>{c.status === 'active' ? 'Actif' : 'Fermé'}</span>
-                )}
+                <button onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }} style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 8,
+                  color: '#ccc', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'color 0.15s',
+                }}
+                  onMouseEnter={e => e.currentTarget.style.color = '#dc2626'}
+                  onMouseLeave={e => e.currentTarget.style.color = '#ccc'}
+                  title="Supprimer"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1.5 14a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2L5 6"/></svg>
+                </button>
               </div>
             </div>
           );
