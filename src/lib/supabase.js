@@ -10,59 +10,40 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     storageKey: 'ifichat-auth',
+    // CRITICAL: bypass Navigator.locks (hangs on some browsers)
+    lock: (name, acquireTimeout, fn) => fn(),
   },
 });
 
-// ─── Keep session alive: refresh token every 10 minutes ─────
-let refreshInterval = null;
+// ─── Keep session alive ─────────────────────────────────────
+let refreshTimer = null;
 
-function startSessionKeepAlive() {
-  if (refreshInterval) return;
-  refreshInterval = setInterval(async () => {
+function startKeepAlive() {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        // Force token refresh if it expires within 15 min
         const expiresAt = session.expires_at;
         const now = Math.floor(Date.now() / 1000);
         if (expiresAt && (expiresAt - now) < 900) {
-          console.log('[ifiChat] Refreshing session token...');
-          const { error } = await supabase.auth.refreshSession();
-          if (error) {
-            console.warn('[ifiChat] Token refresh failed:', error.message);
-          }
+          await supabase.auth.refreshSession();
         }
       }
-    } catch (e) {
-      console.warn('[ifiChat] Session keepalive error:', e);
-    }
-  }, 10 * 60 * 1000); // every 10 min
+    } catch (_) {}
+  }, 4 * 60 * 1000); // every 4 min
 }
 
-// Start keepalive when user is present
 supabase.auth.onAuthStateChange((event, session) => {
-  if (session) {
-    startSessionKeepAlive();
-  } else {
-    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
-  }
+  if (session) startKeepAlive();
+  else if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 });
 
-// Also refresh on tab focus (user was away)
+// Refresh on tab focus
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'visible') {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          const expiresAt = session.expires_at;
-          const now = Math.floor(Date.now() / 1000);
-          if (expiresAt && (expiresAt - now) < 900) {
-            console.log('[ifiChat] Tab focused - refreshing token...');
-            await supabase.auth.refreshSession();
-          }
-        }
-      } catch (e) { /* ignore */ }
+      try { await supabase.auth.refreshSession(); } catch (_) {}
     }
   });
 }
@@ -77,7 +58,7 @@ export async function signInWithGoogle() {
 }
 
 export async function signOut() {
-  if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
   await supabase.auth.signOut();
   window.location.href = '/';
 }

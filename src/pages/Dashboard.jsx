@@ -202,12 +202,27 @@ export default function Dashboard() {
     };
   }, [selectedConv]);
 
-  // Refresh conversation list periodically
+  // Refresh conversation list periodically (every 5s)
   useEffect(() => {
     if (!client?.id) return;
-    const interval = setInterval(loadConversations, 8000);
+    const interval = setInterval(loadConversations, 5000);
     return () => clearInterval(interval);
   }, [client]);
+
+  // Manual full refresh
+  const [refreshing, setRefreshing] = useState(false);
+  async function refreshAll() {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadConversations(),
+        loadSubscription(),
+        loadWidgetConfig(),
+        loadNotifications(),
+      ]);
+    } catch (_) {}
+    setTimeout(() => setRefreshing(false), 600);
+  }
 
   // Auto-scroll
   useEffect(() => {
@@ -1279,6 +1294,19 @@ add dst-host=fonts.gstatic.com comment="ifiChat Fonts"`;
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Refresh Button */}
+          <button onClick={refreshAll} title="Actualiser" style={{
+            background: refreshing ? 'linear-gradient(135deg, #0D9488, #0F766E)' : 'none',
+            border: refreshing ? 'none' : '1.5px solid #e2e8f0',
+            color: refreshing ? '#fff' : '#666',
+            cursor: 'pointer', display: 'flex', padding: 6, borderRadius: 8,
+            transition: 'all 0.3s',
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{
+              transition: 'transform 0.6s', transform: refreshing ? 'rotate(360deg)' : 'rotate(0deg)',
+            }}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+
           {/* Notification Bell */}
           <div ref={notifRef} style={{ position: 'relative' }}>
             <button onClick={() => { setShowNotifs(!showNotifs); if (!showNotifs) markAllRead(); }} style={{
