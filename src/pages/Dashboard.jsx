@@ -115,11 +115,40 @@ export default function Dashboard() {
       })
       .subscribe();
 
+    // Polling fallback every 3s (realtime can fail silently)
+    const pollInterval = setInterval(() => {
+      supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', selectedConv.id)
+        .order('created_at', { ascending: true })
+        .limit(200)
+        .then(({ data }) => {
+          if (!data) return;
+          setChatMessages(prev => {
+            const lastNew = data[data.length - 1]?.id;
+            const lastOld = prev[prev.length - 1]?.id;
+            if (lastNew !== lastOld || data.length !== prev.length) return data;
+            return prev;
+          });
+        });
+    }, 3000);
+
     // Mark as read
     supabase.from('conversations').update({ unread_count: 0 }).eq('id', selectedConv.id);
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(pollInterval);
+    };
   }, [selectedConv]);
+
+  // Refresh conversation list periodically
+  useEffect(() => {
+    if (!client?.id) return;
+    const interval = setInterval(loadConversations, 8000);
+    return () => clearInterval(interval);
+  }, [client]);
 
   // Auto-scroll
   useEffect(() => {
@@ -131,14 +160,28 @@ export default function Dashboard() {
     const txt = chatInput.trim();
     if (!txt || !selectedConv) return;
     setChatInput('');
-    await supabase.from('messages').insert({
+    // Optimistic: show immediately
+    const tmpMsg = {
+      id: 'tmp_' + Date.now(),
+      conversation_id: selectedConv.id,
+      sender_type: 'client',
+      content: txt,
+      content_type: 'text',
+      created_at: new Date().toISOString(),
+    };
+    setChatMessages(prev => [...prev, tmpMsg]);
+    // Insert to DB
+    const { data } = await supabase.from('messages').insert({
       conversation_id: selectedConv.id,
       sender_type: 'client',
       content: txt,
       content_type: 'text',
       is_read: true,
-    });
-    // Update last_message_at
+    }).select().single();
+    // Replace temp with real
+    if (data) {
+      setChatMessages(prev => prev.map(m => m.id === tmpMsg.id ? data : m));
+    }
     await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', selectedConv.id);
   }
 
@@ -148,8 +191,21 @@ export default function Dashboard() {
     e.target.value = '';
 
     const isImg = file.type.startsWith('image/');
+    const isAudio = file.type.startsWith('audio/');
     const ext = file.name.split('.').pop() || 'bin';
     const path = `${client.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+    // Optimistic feedback
+    const tmpId = 'tmp_' + Date.now();
+    const tmpMsg = {
+      id: tmpId,
+      conversation_id: selectedConv.id,
+      sender_type: 'client',
+      content: isImg ? '' : (isAudio ? '🎤 Envoi audio...' : '📎 ' + file.name),
+      content_type: isImg ? 'image' : 'text',
+      created_at: new Date().toISOString(),
+    };
+    setChatMessages(prev => [...prev, tmpMsg]);
 
     const { data, error } = await supabase.storage
       .from('chat-files')
@@ -160,17 +216,19 @@ export default function Dashboard() {
     const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(path);
     const fileUrl = urlData?.publicUrl;
 
-    await supabase.from('messages').insert({
+    const { data: msg } = await supabase.from('messages').insert({
       conversation_id: selectedConv.id,
       sender_type: 'client',
-      content: isImg ? '' : file.name,
+      content: isImg ? '' : (isAudio ? '' : file.name),
       content_type: isImg ? 'image' : 'file',
       file_url: fileUrl,
       file_name: file.name,
       file_size: file.size,
       file_mime_type: file.type,
       is_read: true,
-    });
+    }).select().single();
+    // Replace temp
+    if (msg) setChatMessages(prev => prev.map(m => m.id === tmpId ? msg : m));
     await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', selectedConv.id);
   }
 
@@ -319,7 +377,7 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js" async></script>`;
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=5" async></script>`;
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {
@@ -410,8 +468,17 @@ export default function Dashboard() {
                           maxHeight: 260, objectFit: 'cover',
                         }} onClick={() => window.open(m.file_url, '_blank')} />
                       )}
-                      {/* File */}
-                      {m.content_type === 'file' && m.file_url && (
+                      {/* Audio */}
+                      {m.content_type === 'file' && m.file_url && m.file_mime_type?.startsWith('audio/') && (
+                        <div style={{ padding: '4px 0' }}>
+                          <div style={{ fontSize: 12, color: '#667781', marginBottom: 4 }}>🎤 Message vocal</div>
+                          <audio controls preload="metadata" style={{ width: '100%', maxWidth: 260, height: 36 }}>
+                            <source src={m.file_url} type={m.file_mime_type} />
+                          </audio>
+                        </div>
+                      )}
+                      {/* File (non-audio) */}
+                      {m.content_type === 'file' && m.file_url && !m.file_mime_type?.startsWith('audio/') && (
                         <a href={m.file_url} target="_blank" rel="noreferrer" style={{
                           display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0',
                           textDecoration: 'none', color: '#111',
@@ -542,6 +609,8 @@ export default function Dashboard() {
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Personnaliser le widget</h3>
         {[
           { key: 'business_name', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
+          { key: 'logo_url', label: 'Logo (URL de l\'image)', type: 'text', placeholder: 'https://monsite.com/logo.png' },
+          { key: 'avatar_emoji', label: 'Emoji (si pas de logo)', type: 'text', placeholder: '💬' },
           { key: 'primary_color', label: 'Couleur principale', type: 'color', placeholder: '' },
           { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea', placeholder: 'Ex: Bonjour ! 👋 Comment pouvons-nous vous aider aujourd\'hui ?' },
           { key: 'placeholder_text', label: 'Texte champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },

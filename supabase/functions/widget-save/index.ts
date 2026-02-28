@@ -52,6 +52,7 @@ serve(async (req) => {
       "business_name", "primary_color", "welcome_message",
       "placeholder_text", "position",
       "business_hours", "bottom_offset", "side_offset",
+      "logo_url", "avatar_emoji",
     ];
 
     const safeConfig: Record<string, unknown> = {};

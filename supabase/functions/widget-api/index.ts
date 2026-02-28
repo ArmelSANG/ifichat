@@ -445,54 +445,139 @@ async function sendMessage(body: any, clientId: string) {
 async function uploadFile(req: Request, clientId: string) {
   const formData = await req.formData();
   const file = formData.get("file") as File;
+  const conversationId = formData.get("conversationId") as string;
+  const visitorId = formData.get("visitorId") as string;
 
   if (!file) {
-    return new Response(
-      JSON.stringify({ error: "No file provided" }),
-      { status: 400, headers: corsHeaders }
-    );
+    return new Response(JSON.stringify({ error: "No file provided" }), { status: 400, headers: corsHeaders });
+  }
+  if (!conversationId) {
+    return new Response(JSON.stringify({ error: "conversationId required" }), { status: 400, headers: corsHeaders });
   }
 
-  // Max 10MB
   if (file.size > 10 * 1024 * 1024) {
-    return new Response(
-      JSON.stringify({ error: "File too large (max 10MB)" }),
-      { status: 413, headers: corsHeaders }
-    );
+    return new Response(JSON.stringify({ error: "File too large (max 10MB)" }), { status: 413, headers: corsHeaders });
+  }
+
+  // Verify conversation
+  const { data: conversation } = await supabase
+    .from("conversations")
+    .select("id, client_id, visitor_id")
+    .eq("id", conversationId)
+    .eq("client_id", clientId)
+    .single();
+
+  if (!conversation) {
+    return new Response(JSON.stringify({ error: "Conversation not found" }), { status: 404, headers: corsHeaders });
   }
 
   const ext = file.name.split(".").pop() || "bin";
   const path = `${clientId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-  const { data, error } = await supabase.storage
+  const { error: uploadError } = await supabase.storage
     .from("chat-files")
-    .upload(path, file, {
-      contentType: file.type,
-      upsert: false,
-    });
+    .upload(path, file, { contentType: file.type, upsert: false });
 
-  if (error) {
-    return new Response(
-      JSON.stringify({ error: "Upload failed" }),
-      { status: 500, headers: corsHeaders }
-    );
+  if (uploadError) {
+    return new Response(JSON.stringify({ error: "Upload failed: " + uploadError.message }), { status: 500, headers: corsHeaders });
   }
 
-  const { data: urlData } = supabase.storage
-    .from("chat-files")
-    .getPublicUrl(path);
-
+  const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(path);
+  const fileUrl = urlData.publicUrl;
   const isImage = file.type.startsWith("image/");
+  const isAudio = file.type.startsWith("audio/");
+  const contentType = isImage ? "image" : "file";
+
+  // INSERT message in DB
+  const { data: message, error: msgError } = await supabase
+    .from("messages")
+    .insert({
+      conversation_id: conversationId,
+      sender_type: "visitor",
+      content: isImage ? "" : (isAudio ? "🎤 Message vocal" : file.name),
+      content_type: contentType,
+      file_url: fileUrl,
+      file_name: file.name,
+      file_size: file.size,
+      file_mime_type: file.type,
+      is_read: false,
+    })
+    .select()
+    .single();
+
+  if (msgError) {
+    console.error("File message insert error:", msgError);
+    return new Response(JSON.stringify({ error: "Message creation failed" }), { status: 500, headers: corsHeaders });
+  }
+
+  // Update conversation
+  await supabase
+    .from("conversations")
+    .update({ last_message_at: new Date().toISOString(), unread_count: supabase.rpc ? 1 : 1 })
+    .eq("id", conversationId);
+
+  // Increment unread (raw SQL via update)
+  await supabase.rpc("increment_unread", { conv_id: conversationId }).catch(() => {
+    // Fallback: just set to 1 if rpc doesn't exist
+    supabase.from("conversations").update({ unread_count: 1 }).eq("id", conversationId);
+  });
+
+  // Notify Telegram
+  const { data: visitor } = await supabase
+    .from("visitors")
+    .select("full_name, whatsapp")
+    .eq("id", conversation.visitor_id)
+    .single();
+
+  const { data: client } = await supabase
+    .from("clients")
+    .select("telegram_chat_id, telegram_linked, telegram_is_forum, domain")
+    .eq("id", clientId)
+    .single();
+
+  let telegramMessageId = null;
+
+  if (client?.telegram_linked && client?.telegram_chat_id) {
+    let topicId: number | null = null;
+    if (client.telegram_is_forum) {
+      const { data: conv } = await supabase
+        .from("conversations")
+        .select("telegram_topic_id")
+        .eq("id", conversationId)
+        .single();
+      topicId = conv?.telegram_topic_id || null;
+    }
+
+    let tgResult;
+    if (isImage) {
+      tgResult = await sendTelegramPhoto(
+        client.telegram_chat_id, fileUrl,
+        `📸 <b>Photo de ${visitor?.full_name || "Visiteur"}</b>`,
+        topicId
+      );
+    } else if (isAudio) {
+      tgResult = await sendTelegram(
+        client.telegram_chat_id,
+        `🎤 <b>Audio de ${visitor?.full_name || "Visiteur"}</b>\n${fileUrl}`,
+        topicId
+      );
+    } else {
+      tgResult = await sendTelegramDocument(
+        client.telegram_chat_id, fileUrl,
+        `📎 <b>${file.name}</b> de ${visitor?.full_name || "Visiteur"}`,
+        topicId
+      );
+    }
+
+    telegramMessageId = tgResult?.result?.message_id || null;
+    if (telegramMessageId) {
+      await supabase.from("messages").update({ telegram_message_id: telegramMessageId }).eq("id", message.id);
+    }
+  }
 
   return new Response(
-    JSON.stringify({
-      fileUrl: urlData.publicUrl,
-      fileName: file.name,
-      fileSize: file.size,
-      fileMimeType: file.type,
-      contentType: isImage ? "image" : "file",
-    }),
-    { status: 200, headers: corsHeaders }
+    JSON.stringify({ message, fileUrl, telegramNotified: !!telegramMessageId }),
+    { status: 201, headers: corsHeaders }
   );
 }
 
@@ -521,7 +606,7 @@ serve(async (req) => {
       const convId = path.replace("/messages/", "");
       const { data: messages, error } = await supabase
         .from("messages")
-        .select("id, content, sender_type, content_type, file_url, file_name, created_at")
+        .select("id, content, sender_type, content_type, file_url, file_name, file_mime_type, created_at")
         .eq("conversation_id", convId)
         .order("created_at", { ascending: true })
         .limit(100);
