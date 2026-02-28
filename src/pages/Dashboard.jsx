@@ -349,7 +349,6 @@ export default function Dashboard() {
     if (!widgetConfig) return;
     setSaving(true);
     
-    // ONLY send fields that exist in the original widget_configs table
     const payload = {
       primary_color: widgetConfig.primary_color || '#0D9488',
       welcome_message: widgetConfig.welcome_message || '',
@@ -361,6 +360,20 @@ export default function Dashboard() {
     };
 
     try {
+      // Method 1: Direct Supabase update (no edge function needed)
+      const { error } = await supabase
+        .from('widget_configs')
+        .update(payload)
+        .eq('client_id', client.id);
+
+      if (!error) {
+        showToast('Widget sauvegardé !', 'success');
+        setSaving(false);
+        return;
+      }
+      console.warn('Direct update failed:', error.message);
+
+      // Method 2: Edge function fallback
       const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/widget-save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -368,14 +381,13 @@ export default function Dashboard() {
       });
       const result = await res.json();
       if (res.ok && result.success) {
-        showToast('Widget sauvegardé avec succès !', 'success');
+        showToast('Widget sauvegardé !', 'success');
       } else {
-        console.error('Save error:', result);
         showToast('Erreur : ' + (result.error || result.details || 'Réessayez'), 'error');
       }
     } catch (e) {
-      console.error('Network error:', e);
-      showToast('Erreur réseau. Vérifiez votre connexion.', 'error');
+      console.error('Save error:', e);
+      showToast('Erreur réseau.', 'error');
     }
     setSaving(false);
   }
@@ -406,7 +418,7 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=9" async></script>`;
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=10" async></script>`;
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {
