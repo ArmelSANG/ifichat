@@ -521,7 +521,7 @@ serve(async (req) => {
       const convId = path.replace("/messages/", "");
       const { data: messages, error } = await supabase
         .from("messages")
-        .select("id, content, sender, content_type, file_url, file_name, created_at")
+        .select("id, content, sender_type, content_type, file_url, file_name, created_at")
         .eq("conversation_id", convId)
         .order("created_at", { ascending: true })
         .limit(100);
