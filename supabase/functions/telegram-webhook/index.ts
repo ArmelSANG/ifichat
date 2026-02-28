@@ -632,6 +632,20 @@ serve(async (req) => {
     const isTopicMessage = message.is_topic_message || false;
     const hasMedia = !!(message.photo || message.document || message.voice || message.audio);
 
+    // ─── FORUM TOPIC CLOSED/DELETED from Telegram ───
+    if (message.forum_topic_closed && threadId) {
+      // Topic was closed in Telegram → close conversation in DB
+      const { data: conv } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("telegram_topic_id", threadId)
+        .single();
+      if (conv) {
+        await supabase.from("conversations").update({ status: "closed", updated_at: new Date().toISOString() }).eq("id", conv.id);
+      }
+      return new Response("OK", { status: 200 });
+    }
+
     // ─── FORUM: message in a visitor topic ──────────
     if (chatType === "supergroup" && isTopicMessage && threadId) {
       if (textLower === "/fermer" || textLower === "/close") {

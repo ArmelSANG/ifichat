@@ -302,10 +302,13 @@ export default function Dashboard() {
   }
 
   async function closeConversation(convId) {
-    await supabase.from('conversations').update({ status: 'closed' }).eq('id', convId);
+    await supabase.from('conversations').update({ 
+      status: 'closed', 
+      updated_at: new Date().toISOString() 
+    }).eq('id', convId);
     setSelectedConv(null);
     loadConversations();
-    showToast('Conversation fermée', 'success');
+    showToast('Conversation fermée (suppression auto dans 6h)', 'success');
   }
 
   const widgetDefaults = {
@@ -1035,7 +1038,7 @@ add dst-host=fonts.gstatic.com comment="ifiChat Fonts"`;
         </div>
 
         <div style={{ marginTop: 24, padding: 20, background: '#fefce8', border: '1px solid #fde68a', borderRadius: 12, fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
-          <strong>Rappel :</strong> les messages sont conservés <strong>3 mois</strong>, les fichiers et images <strong>1 mois</strong>. Au-delà, ils sont automatiquement supprimés.
+          <strong>Rappel :</strong> les conversations fermées sont supprimées après <strong>6 heures</strong>. Les fichiers, images et audio sont automatiquement supprimés après <strong>1 mois</strong>.
         </div>
       </div>
     );

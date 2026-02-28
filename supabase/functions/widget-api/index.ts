@@ -56,6 +56,16 @@ async function sendTelegramDocument(chatId: number, docUrl: string, caption: str
   return res.json();
 }
 
+async function sendTelegramVoice(chatId: number, voiceUrl: string, caption: string, threadId?: number | null) {
+  const payload: any = { chat_id: chatId, voice: voiceUrl, caption, parse_mode: "HTML" };
+  if (threadId) payload.message_thread_id = threadId;
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVoice`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+  );
+  return res.json();
+}
+
 // ─── Create Telegram Forum Topic ────────────────────────────
 async function createForumTopic(chatId: number, name: string): Promise<number | null> {
   try {
@@ -570,9 +580,9 @@ async function uploadFile(req: Request, clientId: string) {
         topicId
       );
     } else if (isAudio) {
-      tgResult = await sendTelegram(
-        client.telegram_chat_id,
-        `🎤 <b>Audio de ${visitor?.full_name || "Visiteur"}</b>\n${fileUrl}`,
+      tgResult = await sendTelegramVoice(
+        client.telegram_chat_id, fileUrl,
+        `🎤 <b>Vocal de ${visitor?.full_name || "Visiteur"}</b>`,
         topicId
       );
     } else {
