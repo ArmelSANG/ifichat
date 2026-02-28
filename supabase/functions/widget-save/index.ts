@@ -1,15 +1,13 @@
 // ============================================
-// ifiChat — Edge Function: Widget Save
-// Saves widget config using service role (bypasses RLS)
+// ifiChat — Widget Save (bulletproof v2)
 // ============================================
-
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+);
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -19,125 +17,52 @@ const cors = {
 };
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   try {
     const { clientId, config } = await req.json();
-
     if (!clientId || !config) {
-      return new Response(
-        JSON.stringify({ error: "clientId and config required" }),
-        { status: 400, headers: cors }
-      );
+      return new Response(JSON.stringify({ error: "clientId and config required" }), { status: 400, headers: cors });
     }
 
-    // Verify client exists
-    const { data: client } = await supabase
-      .from("clients")
-      .select("id")
-      .eq("id", clientId)
-      .single();
-
-    if (!client) {
-      return new Response(
-        JSON.stringify({ error: "Client not found" }),
-        { status: 404, headers: cors }
-      );
-    }
-
-    // Allowed fields only (must exist in widget_configs table)
-    const allowed = [
-      "business_name", "primary_color", "welcome_message",
-      "placeholder_text", "position",
-      "business_hours", "bottom_offset", "side_offset",
-      "logo_url", "avatar_emoji",
-    ];
-
-    const safeConfig: Record<string, unknown> = {};
+    // Only use fields that 100% exist in the original schema
+    const safe: Record<string, unknown> = {};
+    const allowed = ["business_name", "primary_color", "welcome_message", "placeholder_text", "position", "business_hours", "logo_url", "away_message"];
+    
     for (const key of allowed) {
-      if (config[key] !== undefined) safeConfig[key] = config[key];
+      if (config[key] !== undefined && config[key] !== null) {
+        safe[key] = config[key];
+      }
     }
 
-    // Core fields that always exist in the table
-    const coreFields = [
-      "business_name", "primary_color", "welcome_message",
-      "placeholder_text", "position", "business_hours", "logo_url",
-    ];
+    if (Object.keys(safe).length === 0) {
+      return new Response(JSON.stringify({ error: "No valid fields" }), { status: 400, headers: cors });
+    }
 
-    // Upsert: update if exists, insert if not
+    // Check if config exists
     const { data: existing } = await supabase
       .from("widget_configs")
       .select("id")
       .eq("client_id", clientId)
       .single();
 
+    let error;
     if (existing) {
-      // Try full update first
-      let { error } = await supabase
-        .from("widget_configs")
-        .update(safeConfig)
-        .eq("client_id", clientId);
-
-      // If fail (new columns don't exist yet), fallback to core fields only
-      if (error) {
-        console.warn("Full update failed, trying core fields:", error.message);
-        const coreConfig: Record<string, unknown> = {};
-        for (const key of coreFields) {
-          if (safeConfig[key] !== undefined) coreConfig[key] = safeConfig[key];
-        }
-        const fallback = await supabase
-          .from("widget_configs")
-          .update(coreConfig)
-          .eq("client_id", clientId);
-        error = fallback.error;
-      }
-
-      if (error) {
-        console.error("Widget update error:", error);
-        return new Response(
-          JSON.stringify({ error: "Failed to update", details: error.message }),
-          { status: 500, headers: cors }
-        );
-      }
+      const res = await supabase.from("widget_configs").update(safe).eq("client_id", clientId);
+      error = res.error;
     } else {
-      let { error } = await supabase
-        .from("widget_configs")
-        .insert({ client_id: clientId, ...safeConfig });
-
-      // Fallback to core fields if new columns don't exist
-      if (error) {
-        console.warn("Full insert failed, trying core fields:", error.message);
-        const coreConfig: Record<string, unknown> = {};
-        for (const key of coreFields) {
-          if (safeConfig[key] !== undefined) coreConfig[key] = safeConfig[key];
-        }
-        const fallback = await supabase
-          .from("widget_configs")
-          .insert({ client_id: clientId, ...coreConfig });
-        error = fallback.error;
-      }
-
-      if (error) {
-        console.error("Widget insert error:", error);
-        return new Response(
-          JSON.stringify({ error: "Failed to create", details: error.message }),
-          { status: 500, headers: cors }
-        );
-      }
+      const res = await supabase.from("widget_configs").insert({ client_id: clientId, ...safe });
+      error = res.error;
     }
 
-    console.log(`[Widget] Config saved for ${clientId}`);
-    return new Response(
-      JSON.stringify({ success: true }),
-      { status: 200, headers: cors }
-    );
+    if (error) {
+      console.error("Widget save error:", error);
+      return new Response(JSON.stringify({ error: "Save failed", details: error.message }), { status: 500, headers: cors });
+    }
+
+    return new Response(JSON.stringify({ success: true }), { status: 200, headers: cors });
   } catch (e) {
-    console.error("Widget save error:", e);
-    return new Response(
-      JSON.stringify({ error: "Internal error", details: String(e) }),
-      { status: 500, headers: cors }
-    );
+    console.error("Crash:", e);
+    return new Response(JSON.stringify({ error: "Internal error", details: String(e) }), { status: 500, headers: cors });
   }
 });

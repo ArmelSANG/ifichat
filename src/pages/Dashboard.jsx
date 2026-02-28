@@ -185,13 +185,42 @@ export default function Dashboard() {
     await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', selectedConv.id);
   }
 
+  // ─── Image compression ──────────────────────
+  function compressImage(file, maxW = 1200, maxH = 1200, quality = 0.7) {
+    return new Promise((resolve) => {
+      if (!file.type.startsWith('image/') || file.type === 'image/gif') { resolve(file); return; }
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxW) { h = Math.round(h * (maxW / w)); w = maxW; }
+        if (h > maxH) { w = Math.round(w * (maxH / h)); h = maxH; }
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        cv.toBlob((blob) => {
+          if (blob && blob.size < file.size) {
+            resolve(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' }));
+          } else { resolve(file); }
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => resolve(file);
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
   async function uploadChatFile(e) {
-    const file = e.target.files[0];
+    let file = e.target.files[0];
     if (!file || !selectedConv) return;
     e.target.value = '';
 
     const isImg = file.type.startsWith('image/');
     const isAudio = file.type.startsWith('audio/');
+
+    // Compress images before upload
+    if (isImg) {
+      file = await compressImage(file, 1200, 1200, 0.7);
+    }
+
     const ext = file.name.split('.').pop() || 'bin';
     const path = `${client.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
@@ -320,17 +349,15 @@ export default function Dashboard() {
     if (!widgetConfig) return;
     setSaving(true);
     
+    // ONLY send fields that exist in the original widget_configs table
     const payload = {
-      primary_color: widgetConfig.primary_color,
-      welcome_message: widgetConfig.welcome_message,
-      placeholder_text: widgetConfig.placeholder_text,
-      position: widgetConfig.position,
-      business_name: widgetConfig.business_name,
-      business_hours: widgetConfig.business_hours,
-      bottom_offset: widgetConfig.bottom_offset || 20,
-      side_offset: widgetConfig.side_offset || 20,
+      primary_color: widgetConfig.primary_color || '#0D9488',
+      welcome_message: widgetConfig.welcome_message || '',
+      placeholder_text: widgetConfig.placeholder_text || '',
+      position: widgetConfig.position || 'bottom-right',
+      business_name: widgetConfig.business_name || '',
+      business_hours: widgetConfig.business_hours || '08:00-18:00',
       logo_url: widgetConfig.logo_url || '',
-      avatar_emoji: widgetConfig.avatar_emoji || '💬',
     };
 
     try {
@@ -379,7 +406,7 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=7" async></script>`;
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=9" async></script>`;
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {
@@ -612,7 +639,6 @@ export default function Dashboard() {
         {[
           { key: 'business_name', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
           { key: 'logo_url', label: 'Logo (URL de l\'image)', type: 'text', placeholder: 'https://monsite.com/logo.png' },
-          { key: 'avatar_emoji', label: 'Emoji (si pas de logo)', type: 'text', placeholder: '💬' },
           { key: 'primary_color', label: 'Couleur principale', type: 'color', placeholder: '' },
           { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea', placeholder: 'Ex: Bonjour ! 👋 Comment pouvons-nous vous aider aujourd\'hui ?' },
           { key: 'placeholder_text', label: 'Texte champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },
