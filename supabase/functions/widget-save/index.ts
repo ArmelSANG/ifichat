@@ -1,5 +1,5 @@
 // ============================================
-// ifiChat — Widget Save (bulletproof v2)
+// ifiChat — Widget Save (uses REAL column names)
 // ============================================
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -25,10 +25,16 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "clientId and config required" }), { status: 400, headers: cors });
     }
 
-    // Only use fields that 100% exist in the original schema
+    // REAL columns from widget_configs table
+    const allowed = [
+      "primary_color", "secondary_color", "bg_color", "text_color",
+      "header_text", "welcome_message", "offline_message",
+      "logo_url", "position", "bubble_size", "show_branding",
+      "auto_open_delay", "bottom_offset", "side_offset",
+      "avatar_emoji", "business_hours", "away_message",
+    ];
+
     const safe: Record<string, unknown> = {};
-    const allowed = ["business_name", "primary_color", "welcome_message", "placeholder_text", "position", "business_hours", "logo_url", "away_message"];
-    
     for (const key of allowed) {
       if (config[key] !== undefined && config[key] !== null) {
         safe[key] = config[key];
@@ -39,12 +45,7 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "No valid fields" }), { status: 400, headers: cors });
     }
 
-    // Check if config exists
-    const { data: existing } = await supabase
-      .from("widget_configs")
-      .select("id")
-      .eq("client_id", clientId)
-      .single();
+    const { data: existing } = await supabase.from("widget_configs").select("id").eq("client_id", clientId).single();
 
     let error;
     if (existing) {
@@ -56,13 +57,11 @@ serve(async (req) => {
     }
 
     if (error) {
-      console.error("Widget save error:", error);
       return new Response(JSON.stringify({ error: "Save failed", details: error.message }), { status: 500, headers: cors });
     }
 
     return new Response(JSON.stringify({ success: true }), { status: 200, headers: cors });
   } catch (e) {
-    console.error("Crash:", e);
     return new Response(JSON.stringify({ error: "Internal error", details: String(e) }), { status: 500, headers: cors });
   }
 });

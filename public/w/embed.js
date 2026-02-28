@@ -189,8 +189,10 @@ el.textContent='\
 /* === MOBILE === */\
 @media(max-width:480px){\
   #IFI .win{width:calc(100vw - 16px);max-width:none;'+(isL?"left:8px":"right:8px")+';height:62vh;max-height:62vh;bottom:'+(bot+66)+'px;border-radius:16px}\
-  #IFI .ibtn.hmob{display:none}\
-  #IFI .inp{font-size:13px;padding:8px 12px}\
+  #IFI .sf{gap:3px}\
+  #IFI .ibtn{width:32px;height:32px;min-width:32px}\
+  #IFI .ibtn svg{width:20px;height:20px}\
+  #IFI .inp{font-size:13px;padding:7px 10px}\
   #IFI .sendbtn{width:36px;height:36px;min-width:36px}\
   #IFI .bub{max-width:85%}\
   #IFI .mrow.vis{padding-left:24px}\
@@ -206,7 +208,7 @@ document.head.appendChild(el);
 function buildUI(){
 var root=document.createElement("div");root.id="IFI";
 var logo=CFG.logo_url||"";
-var biz=CFG.business_name||"Support";
+var biz=CFG.header_text||CFG.business_name||"Support";
 var avH=logo?'<img src="'+logo+'" alt="">':'<em>'+(CFG.avatar_emoji||"💬")+'</em>';
 
 root.innerHTML='\
@@ -237,7 +239,7 @@ root.innerHTML='\
       <button type="button" class="ibtn" id="iemb"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>\
       <button type="button" class="ibtn" id="iatt"><svg viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>\
       <input type="text" class="inp" id="iinp" placeholder="'+(CFG.placeholder_text||"Écrivez un message…")+'" autocomplete="off">\
-      <button type="button" class="ibtn hmob" id="imic"><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>\
+      <button type="button" class="ibtn" id="imic"><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>\
       <button type="submit" class="sendbtn"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>\
       <input type="file" class="fhid" id="ifh" accept="image/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx">\
     </form>\
@@ -428,7 +430,7 @@ function doPoll(){
     if(!d||!d.messages)return;var nc=0;
     d.messages.forEach(function(m){
       if(!MSGS.some(function(e){return e.id===m.id})){
-        if(m.sender_type==="visitor"){var i=MSGS.findIndex(function(e){return String(e.id).startsWith("t_")&&(e.content===m.content||(m.file_url&&e.file_url))});if(i>-1){MSGS.splice(i,1);return}}
+        if(m.sender_type==="visitor"){var i=MSGS.findIndex(function(e){return String(e.id).startsWith("t_")&&(e.content===m.content||(m.file_url&&e.file_url))});if(i>-1){MSGS[i].id=m.id;return}}
         addMsg(m);if(m.sender_type==="client")nc++;
       }
     });

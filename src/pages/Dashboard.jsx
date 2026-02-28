@@ -269,14 +269,15 @@ export default function Dashboard() {
   }
 
   const widgetDefaults = {
-    business_name: client?.name || 'Mon Entreprise',
+    header_text: client?.name || 'Mon Entreprise',
     primary_color: '#0D9488',
     welcome_message: 'Bonjour ! 👋 Comment pouvons-nous vous aider ?',
-    placeholder_text: 'Écrivez votre message...',
-    away_message: 'Nous sommes absents pour le moment. Laissez-nous un message et nous vous répondrons dès que possible.',
+    offline_message: 'Nous sommes absents pour le moment.',
     position: 'bottom-right',
     bottom_offset: 20,
     side_offset: 20,
+    logo_url: '',
+    avatar_emoji: '💬',
   };
 
   async function loadWidgetConfig() {
@@ -349,18 +350,20 @@ export default function Dashboard() {
     if (!widgetConfig) return;
     setSaving(true);
     
+    // Use REAL column names from widget_configs table
     const payload = {
       primary_color: widgetConfig.primary_color || '#0D9488',
+      header_text: widgetConfig.header_text || '',
       welcome_message: widgetConfig.welcome_message || '',
-      placeholder_text: widgetConfig.placeholder_text || '',
       position: widgetConfig.position || 'bottom-right',
-      business_name: widgetConfig.business_name || '',
-      business_hours: widgetConfig.business_hours || '08:00-18:00',
       logo_url: widgetConfig.logo_url || '',
+      bottom_offset: widgetConfig.bottom_offset || 20,
+      side_offset: widgetConfig.side_offset || 20,
+      avatar_emoji: widgetConfig.avatar_emoji || '💬',
+      offline_message: widgetConfig.offline_message || '',
     };
 
     try {
-      // Method 1: Direct Supabase update (no edge function needed)
       const { error } = await supabase
         .from('widget_configs')
         .update(payload)
@@ -368,22 +371,9 @@ export default function Dashboard() {
 
       if (!error) {
         showToast('Widget sauvegardé !', 'success');
-        setSaving(false);
-        return;
-      }
-      console.warn('Direct update failed:', error.message);
-
-      // Method 2: Edge function fallback
-      const res = await fetch(`${SUPABASE_FUNCTIONS_URL}/widget-save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId: client.id, config: payload }),
-      });
-      const result = await res.json();
-      if (res.ok && result.success) {
-        showToast('Widget sauvegardé !', 'success');
       } else {
-        showToast('Erreur : ' + (result.error || result.details || 'Réessayez'), 'error');
+        console.error('Save error:', error.message);
+        showToast('Erreur : ' + error.message, 'error');
       }
     } catch (e) {
       console.error('Save error:', e);
@@ -649,11 +639,11 @@ export default function Dashboard() {
       <div>
         <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Personnaliser le widget</h3>
         {[
-          { key: 'business_name', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
+          { key: 'header_text', label: 'Nom affiché', type: 'text', placeholder: 'Ex: Boutique Adama, Clinique Santé+...' },
           { key: 'logo_url', label: 'Logo (URL de l\'image)', type: 'text', placeholder: 'https://monsite.com/logo.png' },
           { key: 'primary_color', label: 'Couleur principale', type: 'color', placeholder: '' },
           { key: 'welcome_message', label: 'Message d\'accueil', type: 'textarea', placeholder: 'Ex: Bonjour ! 👋 Comment pouvons-nous vous aider aujourd\'hui ?' },
-          { key: 'placeholder_text', label: 'Texte champ de saisie', type: 'text', placeholder: 'Ex: Écrivez votre message ici...' },
+          { key: 'offline_message', label: 'Message absence', type: 'text', placeholder: 'Ex: Nous sommes absents, laissez un message...' },
         ].map(field => (
           <div key={field.key} style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 5 }}>{field.label}</label>
