@@ -78,26 +78,53 @@ export default function Dashboard() {
   }
 
   async function loadConversations() {
-    const { data } = await supabase
-      .from('conversations')
-      .select('*, visitors(full_name, whatsapp)')
-      .eq('client_id', client.id)
-      .order('last_message_at', { ascending: false })
-      .limit(50);
-    setConversations(data || []);
+    try {
+      const { data, error } = await supabase
+        .from('conversations')
+        .select('*, visitors(full_name, whatsapp)')
+        .eq('client_id', client.id)
+        .order('last_message_at', { ascending: false })
+        .limit(50);
+      if (error) {
+        console.warn('Load conversations error:', error.message);
+        // Session might be stale — refresh
+        await supabase.auth.getSession();
+        return;
+      }
+      setConversations(data || []);
+    } catch (e) {
+      console.warn('Load conversations failed:', e);
+    }
   }
 
   // ─── Chat: load messages when conversation selected ────────
   useEffect(() => {
     if (!selectedConv) { setChatMessages([]); return; }
     setChatLoading(true);
-    supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', selectedConv.id)
-      .order('created_at', { ascending: true })
-      .limit(200)
-      .then(({ data }) => { setChatMessages(data || []); setChatLoading(false); });
+
+    // Load with error handling + timeout
+    const loadMessages = () => {
+      supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', selectedConv.id)
+        .order('created_at', { ascending: true })
+        .limit(200)
+        .then(({ data, error }) => {
+          if (error) {
+            console.warn('Load messages error:', error.message);
+            // Session may have expired — try refreshing
+            supabase.auth.getSession();
+          }
+          setChatMessages(data || []);
+          setChatLoading(false);
+        })
+        .catch(() => { setChatLoading(false); });
+    };
+    loadMessages();
+
+    // Safety: force loading=false after 8s no matter what
+    const safetyTimeout = setTimeout(() => setChatLoading(false), 8000);
 
     // Real-time subscription
     const channel = supabase
@@ -115,7 +142,8 @@ export default function Dashboard() {
       })
       .subscribe();
 
-    // Polling fallback every 3s (realtime can fail silently)
+    // Polling fallback every 3s
+    let pollErrors = 0;
     const pollInterval = setInterval(() => {
       supabase
         .from('messages')
@@ -123,7 +151,17 @@ export default function Dashboard() {
         .eq('conversation_id', selectedConv.id)
         .order('created_at', { ascending: true })
         .limit(200)
-        .then(({ data }) => {
+        .then(({ data, error }) => {
+          if (error) {
+            pollErrors++;
+            if (pollErrors >= 3) {
+              // Session likely expired — refresh
+              supabase.auth.getSession();
+              pollErrors = 0;
+            }
+            return;
+          }
+          pollErrors = 0;
           if (!data) return;
           setChatMessages(prev => {
             const lastNew = data[data.length - 1]?.id;
@@ -131,7 +169,8 @@ export default function Dashboard() {
             if (lastNew !== lastOld || data.length !== prev.length) return data;
             return prev;
           });
-        });
+        })
+        .catch(() => {});
     }, 3000);
 
     // Mark as read
@@ -140,6 +179,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel);
       clearInterval(pollInterval);
+      clearTimeout(safetyTimeout);
     };
   }, [selectedConv]);
 
@@ -350,7 +390,6 @@ export default function Dashboard() {
     if (!widgetConfig) return;
     setSaving(true);
     
-    // Use REAL column names from widget_configs table
     const payload = {
       primary_color: widgetConfig.primary_color || '#0D9488',
       header_text: widgetConfig.header_text || '',
@@ -363,12 +402,19 @@ export default function Dashboard() {
       offline_message: widgetConfig.offline_message || '',
     };
 
+    // Timeout: never hang more than 10s
+    const timeout = setTimeout(() => {
+      setSaving(false);
+      showToast('Timeout — rechargez la page et réessayez.', 'error');
+    }, 10000);
+
     try {
       const { error } = await supabase
         .from('widget_configs')
         .update(payload)
         .eq('client_id', client.id);
 
+      clearTimeout(timeout);
       if (!error) {
         showToast('Widget sauvegardé !', 'success');
       } else {
@@ -376,7 +422,8 @@ export default function Dashboard() {
         showToast('Erreur : ' + error.message, 'error');
       }
     } catch (e) {
-      console.error('Save error:', e);
+      clearTimeout(timeout);
+      console.error('Save crash:', e);
       showToast('Erreur réseau.', 'error');
     }
     setSaving(false);
