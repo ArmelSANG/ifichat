@@ -38,6 +38,12 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [showNotifs, setShowNotifs] = useState(false);
   const notifRef = useRef(null);
+  const [selectedConv, setSelectedConv] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
+  const chatFileRef = useRef(null);
 
   // Close notification dropdown on click outside
   useEffect(() => {
@@ -79,6 +85,100 @@ export default function Dashboard() {
       .order('last_message_at', { ascending: false })
       .limit(50);
     setConversations(data || []);
+  }
+
+  // ─── Chat: load messages when conversation selected ────────
+  useEffect(() => {
+    if (!selectedConv) { setChatMessages([]); return; }
+    setChatLoading(true);
+    supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', selectedConv.id)
+      .order('created_at', { ascending: true })
+      .limit(200)
+      .then(({ data }) => { setChatMessages(data || []); setChatLoading(false); });
+
+    // Real-time subscription
+    const channel = supabase
+      .channel('chat-' + selectedConv.id)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${selectedConv.id}`,
+      }, (payload) => {
+        setChatMessages(prev => {
+          if (prev.some(m => m.id === payload.new.id)) return prev;
+          return [...prev, payload.new];
+        });
+      })
+      .subscribe();
+
+    // Mark as read
+    supabase.from('conversations').update({ unread_count: 0 }).eq('id', selectedConv.id);
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedConv]);
+
+  // Auto-scroll
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  async function sendChatMessage(e) {
+    e?.preventDefault();
+    const txt = chatInput.trim();
+    if (!txt || !selectedConv) return;
+    setChatInput('');
+    await supabase.from('messages').insert({
+      conversation_id: selectedConv.id,
+      sender_type: 'client',
+      content: txt,
+      content_type: 'text',
+      is_read: true,
+    });
+    // Update last_message_at
+    await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', selectedConv.id);
+  }
+
+  async function uploadChatFile(e) {
+    const file = e.target.files[0];
+    if (!file || !selectedConv) return;
+    e.target.value = '';
+
+    const isImg = file.type.startsWith('image/');
+    const ext = file.name.split('.').pop() || 'bin';
+    const path = `${client.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+    const { data, error } = await supabase.storage
+      .from('chat-files')
+      .upload(path, file, { contentType: file.type });
+
+    if (error) { showToast('Erreur upload: ' + error.message, 'error'); return; }
+
+    const { data: urlData } = supabase.storage.from('chat-files').getPublicUrl(path);
+    const fileUrl = urlData?.publicUrl;
+
+    await supabase.from('messages').insert({
+      conversation_id: selectedConv.id,
+      sender_type: 'client',
+      content: isImg ? '' : file.name,
+      content_type: isImg ? 'image' : 'file',
+      file_url: fileUrl,
+      file_name: file.name,
+      file_size: file.size,
+      file_mime_type: file.type,
+      is_read: true,
+    });
+    await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', selectedConv.id);
+  }
+
+  async function closeConversation(convId) {
+    await supabase.from('conversations').update({ status: 'closed' }).eq('id', convId);
+    setSelectedConv(null);
+    loadConversations();
+    showToast('Conversation fermée', 'success');
   }
 
   const widgetDefaults = {
@@ -223,49 +323,214 @@ export default function Dashboard() {
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {
+    // ─── Chat View ───────────────────────────────
+    if (selectedConv) {
+      const vis = selectedConv.visitors || {};
+      const name = vis.full_name || 'Visiteur';
+      const phone = vis.whatsapp || '';
+
+      function formatDate(d) {
+        const dt = new Date(d);
+        const today = new Date();
+        if (dt.toDateString() === today.toDateString()) return "Aujourd'hui";
+        const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+        if (dt.toDateString() === yesterday.toDateString()) return 'Hier';
+        return dt.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' });
+      }
+
+      let lastDate = '';
+
+      return (
+        <div style={{ margin: '-28px -24px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)', minHeight: 400 }}>
+          {/* Chat header */}
+          <div style={{
+            padding: '14px 18px', borderBottom: '1px solid #e9ecef',
+            display: 'flex', alignItems: 'center', gap: 14, background: '#fafbfc', flexShrink: 0,
+          }}>
+            <button onClick={() => setSelectedConv(null)} style={{
+              background: '#f0f2f5', border: 'none', borderRadius: 10, width: 36, height: 36,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="2.5" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div style={{
+              width: 40, height: 40, borderRadius: 12,
+              background: `linear-gradient(135deg, hsl(${(name.charCodeAt(0) || 0) * 7}, 50%, 55%), hsl(${(name.charCodeAt(0) || 0) * 7 + 30}, 40%, 45%))`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 700, fontSize: 15, flexShrink: 0,
+            }}>{name.charAt(0)}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{name}</div>
+              <div style={{ fontSize: 12, color: '#667781' }}>{phone}</div>
+            </div>
+            <button onClick={() => closeConversation(selectedConv.id)} style={{
+              background: 'none', border: '1px solid #fca5a5', borderRadius: 8,
+              padding: '6px 14px', fontSize: 12, color: '#dc2626', cursor: 'pointer', fontFamily: 'inherit',
+            }}>Fermer</button>
+          </div>
+
+          {/* Messages */}
+          <div style={{
+            flex: 1, overflowY: 'auto', padding: '16px 20px',
+            background: 'linear-gradient(180deg, #efeae2 0%, #d1c4b2 100%)',
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23c8bfb0' fill-opacity='0.15'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            display: 'flex', flexDirection: 'column', gap: 2,
+          }}>
+            {chatLoading && <div style={{ textAlign: 'center', color: '#8696a0', padding: 20 }}>Chargement...</div>}
+            {chatMessages.map((m, i) => {
+              const isClient = m.sender_type === 'client';
+              const isVisitor = m.sender_type === 'visitor';
+              const msgDate = formatDate(m.created_at);
+              let showDate = false;
+              if (msgDate !== lastDate) { lastDate = msgDate; showDate = true; }
+              const time = new Date(m.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+              return (
+                <div key={m.id}>
+                  {showDate && (
+                    <div style={{ textAlign: 'center', margin: '12px 0 8px' }}>
+                      <span style={{ background: '#fff', padding: '4px 14px', borderRadius: 8, fontSize: 11, color: '#8696a0', boxShadow: '0 1px 3px rgba(0,0,0,.06)' }}>{msgDate}</span>
+                    </div>
+                  )}
+                  <div style={{
+                    display: 'flex', justifyContent: isVisitor ? 'flex-start' : 'flex-end',
+                    marginBottom: 2,
+                  }}>
+                    <div style={{
+                      maxWidth: '72%', padding: '8px 12px', borderRadius: 10,
+                      background: isClient ? '#d9fdd3' : '#fff',
+                      borderBottomRightRadius: isClient ? 4 : 10,
+                      borderBottomLeftRadius: isVisitor ? 4 : 10,
+                      boxShadow: '0 1px 2px rgba(0,0,0,.06)',
+                    }}>
+                      {/* Image */}
+                      {m.content_type === 'image' && m.file_url && (
+                        <img src={m.file_url} alt="Photo" style={{
+                          maxWidth: '100%', borderRadius: 6, marginBottom: 4, cursor: 'pointer',
+                          maxHeight: 260, objectFit: 'cover',
+                        }} onClick={() => window.open(m.file_url, '_blank')} />
+                      )}
+                      {/* File */}
+                      {m.content_type === 'file' && m.file_url && (
+                        <a href={m.file_url} target="_blank" rel="noreferrer" style={{
+                          display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0',
+                          textDecoration: 'none', color: '#111',
+                        }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 8, background: '#f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📎</div>
+                          <div style={{ fontSize: 13, fontWeight: 500 }}>{m.file_name || 'Fichier'}</div>
+                        </a>
+                      )}
+                      {/* Text */}
+                      {m.content && <div style={{ fontSize: 14, lineHeight: 1.45, color: '#111', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.content}</div>}
+                      <div style={{ fontSize: 10, color: '#667781', textAlign: 'right', marginTop: 2 }}>{time}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input bar */}
+          <div style={{
+            padding: '10px 14px', borderTop: '1px solid #e9ecef', background: '#f0f2f5',
+            display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0,
+          }}>
+            <button onClick={() => chatFileRef.current?.click()} style={{
+              width: 40, height: 40, borderRadius: 12, border: 'none', background: '#fff',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#667781', flexShrink: 0,
+            }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <input type="file" ref={chatFileRef} style={{ display: 'none' }} onChange={uploadChatFile} accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.rar" />
+            <form onSubmit={sendChatMessage} style={{ flex: 1, display: 'flex', gap: 8 }}>
+              <input
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                placeholder="Écrivez un message..."
+                style={{
+                  flex: 1, padding: '10px 18px', borderRadius: 24, border: '1px solid #e2e8f0',
+                  fontSize: 14, fontFamily: 'inherit', outline: 'none', background: '#fff',
+                  boxSizing: 'border-box',
+                }}
+                onFocus={e => e.target.style.borderColor = '#0D9488'}
+                onBlur={e => e.target.style.borderColor = '#e2e8f0'}
+              />
+              <button type="submit" style={{
+                width: 42, height: 42, borderRadius: '50%', border: 'none',
+                background: 'linear-gradient(135deg, #0D9488, #0F766E)',
+                color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Conversation List ───────────────────────
     if (conversations.length === 0) {
       return (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#999' }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
           <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8, color: '#555' }}>Aucune conversation</h3>
           <p style={{ fontSize: 14 }}>Les conversations de vos visiteurs apparaîtront ici.</p>
-          <p style={{ fontSize: 12, color: '#bbb', marginTop: 8 }}>Les messages sont conservés 3 mois • Les fichiers 1 mois</p>
         </div>
       );
     }
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {conversations.map(c => (
-          <div key={c.id} style={{
-            background: '#fff', borderRadius: 14, padding: '16px 18px',
-            border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 14,
-            cursor: 'pointer', transition: 'all 0.2s',
-          }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = '#d1d5db'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = '#f0f0f0'}
-          >
-            <div style={{
-              width: 42, height: 42, borderRadius: 12,
-              background: `linear-gradient(135deg, hsl(${(c.visitor_id?.charCodeAt?.(0) || 0) * 7}, 50%, 55%), hsl(${(c.visitor_id?.charCodeAt?.(0) || 0) * 7 + 30}, 40%, 45%))`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 700, fontSize: 15, flexShrink: 0,
-            }}>{c.visitors?.full_name?.charAt(0) || '?'}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>{c.visitors?.full_name || 'Visiteur'}</div>
-              <div style={{ fontSize: 12, color: '#999' }}>{c.visitors?.whatsapp || ''}</div>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 12, color: '#bbb' }}>
-                {c.last_message_at ? new Date(c.last_message_at).toLocaleDateString('fr-FR') : '-'}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>{conversations.length} conversation(s)</h3>
+        </div>
+        {conversations.map(c => {
+          const name = c.visitors?.full_name || 'Visiteur';
+          const unread = c.unread_count > 0;
+          // Last message preview
+          return (
+            <div key={c.id} onClick={() => setSelectedConv(c)} style={{
+              background: '#fff', borderRadius: 14, padding: '14px 16px',
+              border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 14,
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#f8f9fa'; e.currentTarget.style.borderColor = '#d1d5db'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#f0f0f0'; }}
+            >
+              <div style={{
+                width: 44, height: 44, borderRadius: 12,
+                background: `linear-gradient(135deg, hsl(${(name.charCodeAt(0)) * 7}, 50%, 55%), hsl(${(name.charCodeAt(0)) * 7 + 30}, 40%, 45%))`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontWeight: 700, fontSize: 16, flexShrink: 0,
+              }}>{name.charAt(0)}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: unread ? 700 : 600, fontSize: 14, color: '#111' }}>{name}</div>
+                <div style={{ fontSize: 12, color: '#667781', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.visitors?.whatsapp || ''}
+                </div>
               </div>
-              <span style={{
-                fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
-                background: c.status === 'active' ? '#ecfdf5' : '#fef2f2',
-                color: c.status === 'active' ? '#059669' : '#dc2626',
-              }}>{c.status === 'active' ? 'Actif' : c.status === 'closed' ? 'Fermé' : 'Archivé'}</span>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: 11, color: unread ? '#0D9488' : '#bbb', fontWeight: unread ? 600 : 400, marginBottom: 4 }}>
+                  {c.last_message_at ? new Date(c.last_message_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                </div>
+                {unread && (
+                  <span style={{
+                    display: 'inline-block', minWidth: 20, height: 20, lineHeight: '20px',
+                    borderRadius: 10, background: '#0D9488', color: '#fff',
+                    fontSize: 11, fontWeight: 700, textAlign: 'center', padding: '0 5px',
+                  }}>{c.unread_count}</span>
+                )}
+                {!unread && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 500, padding: '2px 8px', borderRadius: 6,
+                    background: c.status === 'active' ? '#ecfdf5' : '#fef2f2',
+                    color: c.status === 'active' ? '#059669' : '#dc2626',
+                  }}>{c.status === 'active' ? 'Actif' : 'Fermé'}</span>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     );
   }
