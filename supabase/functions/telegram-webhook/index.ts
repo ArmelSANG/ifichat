@@ -123,7 +123,10 @@ async function handleTopicMessage(chatId: number, threadId: number, text: string
     return;
   }
 
-  await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conv.id);
+  await supabase.from("conversations").update({
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+  }).eq("id", conv.id);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -298,7 +301,10 @@ async function cmdReply(chatId: number, index: number, message: string) {
 
   if (error) { await send(chatId, "❌ Erreur. Réessayez."); return; }
 
-  await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conv.id);
+  await supabase.from("conversations").update({
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+  }).eq("id", conv.id);
   await send(chatId, `✅ Envoyé à <b>${(conv as any).visitors?.full_name || "Visiteur"}</b>`);
 }
 
@@ -401,7 +407,10 @@ async function handleReply(chatId: number, replyToMessageId: number, text: strin
 
   if (error) { await send(chatId, "❌ Erreur."); return; }
 
-  await supabase.from("conversations").update({ unread_count: 0 }).eq("id", conversationId);
+  await supabase.from("conversations").update({
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+  }).eq("id", conversationId);
   await send(chatId, "✅ Envoyé !");
 }
 

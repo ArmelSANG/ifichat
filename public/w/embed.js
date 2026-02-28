@@ -143,11 +143,17 @@ function injectCSS(){
 '@keyframes _tp{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}'+
 '@keyframes _rp{0%,100%{opacity:1}50%{opacity:.3}}'+
 
-// MOBILE — not fullscreen, reduced height
+// MOBILE — not fullscreen, compact bar
 '@media(max-width:480px){'+
   '#ifi{width:calc(100vw - 16px);'+(isL?'left:8px':'right:8px')+';height:60vh;max-height:60vh;bottom:'+(bot+62)+'px;border-radius:14px}'+
   '.iBn.hm{display:none}'+
-  '#ifi-si{padding:7px 8px;font-size:12px}'+
+  '.iBn{width:28px;height:28px;min-width:28px}'+
+  '.iBn svg{width:16px;height:16px}'+
+  '#ifi-sn{width:30px;height:30px;min-width:30px}'+
+  '#ifi-sn svg{width:13px;height:13px}'+
+  '#ifi-si{padding:6px 8px;font-size:12px}'+
+  '#ifi-br{padding:4px 5px}'+
+  '#ifi-sf{gap:2px}'+
 '}'+
 '@media(min-width:481px){'+
   '#ifi{max-height:calc(100vh - '+(bot+80)+'px)}'+
@@ -173,7 +179,7 @@ function buildUI(){
 '<div id="ifi-tp"><div id="ifi-tpi"><span></span><span></span><span></span></div></div>'+
 '<div id="ifi-fm"><label>Votre nom</label><input id="ifi-fn" placeholder="Ex: Adama Koné"><label>Téléphone</label><input id="ifi-wa" type="tel" inputmode="numeric" placeholder="229 XX XX XX XX"><div id="ifi-fm-e">Numéro invalide (min 8 chiffres)</div><button id="ifi-fm-b">Démarrer →</button></div>'+
 '<div id="ifi-br" style="position:relative"><div id="ifi-em"></div><form id="ifi-sf">'+
-  '<button type="button" class="iBn hm" id="ifi-eb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>'+
+  '<button type="button" class="iBn" id="ifi-eb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button>'+
   '<button type="button" class="iBn" id="ifi-at"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>'+
   '<input type="text" id="ifi-si" placeholder="'+(CFG.placeholder_text||"Message...")+'" autocomplete="off">'+
   '<button type="button" class="iBn hm" id="ifi-rc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg></button>'+
@@ -205,18 +211,63 @@ function buildUI(){
 // ═══ TOGGLE ═══════════════════════════════
 function toggle(){OPEN?closeChat():openChat()}
 function openChat(){
-  OPEN=true;$("ifi").style.display="flex";$("ifi-fab").classList.add("on");
+  OPEN=true;stopBgPoll();$("ifi").style.display="flex";$("ifi-fab").classList.add("on");
   requestAnimationFrame(function(){$("ifi").classList.add("show")});
   if(!CONV)$("ifi-fm").style.display="block";
-  else startPolling();
+  else{
+    // Re-fetch all messages (catch ones received while closed)
+    fetch(API+"/messages/"+CONV).then(function(r){if(!r.ok)return null;return r.json()}).then(function(d){
+      if(!d||!d.messages)return;
+      var hasNew=false;
+      d.messages.forEach(function(m){
+        if(!MSGS.some(function(e){return e.id===m.id})){
+          // Skip temp duplicates
+          if(m.sender_type==="visitor"){
+            var idx=MSGS.findIndex(function(e){return String(e.id).startsWith("t_")&&e.content===m.content});
+            if(idx>-1){MSGS.splice(idx,1);return}
+          }
+          addMsg(m,true);hasNew=true;
+        }
+      });
+      if(hasNew)scrl();
+    }).catch(function(){});
+    startPolling();
+  }
   $("ifi-bdg").style.display="none";$("ifi-bdg").textContent="0";scrl();
 }
 function closeChat(){
   OPEN=false;$("ifi").classList.remove("show");$("ifi-fab").classList.remove("on");
   try{$("ifi-em").style.display="none"}catch(e){}
-  setTimeout(function(){if(!OPEN)$("ifi").style.display="none"},350);stopPolling();
+  setTimeout(function(){if(!OPEN)$("ifi").style.display="none"},350);
+  // Switch to slow background polling for badge
+  stopPolling();
+  if(CONV)startBgPoll();
 }
 function scrl(){var b=$("ifi-bd");if(b)setTimeout(function(){b.scrollTop=b.scrollHeight},50)}
+
+// Background poll (slow, for badge when chat closed)
+var BGPOLL=null;
+function startBgPoll(){
+  if(BGPOLL||!CONV)return;
+  BGPOLL=setInterval(function(){
+    if(OPEN){stopBgPoll();return}
+    fetch(API+"/messages/"+CONV).then(function(r){if(!r.ok)return null;return r.json()}).then(function(d){
+      if(!d||!d.messages)return;
+      var nc=0;
+      d.messages.forEach(function(m){
+        if(!MSGS.some(function(e){return e.id===m.id})){
+          if(m.sender_type==="client")nc++;
+          MSGS.push(m); // track but don't render
+        }
+      });
+      if(nc>0){
+        var b=$("ifi-bdg");b.textContent=String(parseInt(b.textContent||"0")+nc);b.style.display="block";
+        playSound();
+      }
+    }).catch(function(){});
+  },8000);
+}
+function stopBgPoll(){if(BGPOLL){clearInterval(BGPOLL);BGPOLL=null}}
 
 // ═══ START CONVERSATION ═══════════════════
 function startConv(){
@@ -367,6 +418,7 @@ function restoreSession(){
       var wl=document.querySelector(".iWl");if(wl)wl.style.display="none";
       fetch(API+"/messages/"+CONV).then(function(r){if(!r.ok)return null;return r.json()}).then(function(d){
         if(d&&d.messages)d.messages.forEach(function(m){addMsg(m,true)});
+        startBgPoll(); // Background poll for badge
       }).catch(function(){});
     }
   }catch(x){}

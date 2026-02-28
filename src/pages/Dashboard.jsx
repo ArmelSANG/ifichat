@@ -377,7 +377,7 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=5" async></script>`;
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=6" async></script>`;
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {
