@@ -51,6 +51,53 @@ async function sendFile(chatId: number, fileUrl: string, caption: string, type: 
   return res.json();
 }
 
+// Download Telegram file → upload to Supabase storage → return public URL
+async function downloadTelegramFile(fileId: string, clientId: string): Promise<{url: string, name: string, mime: string, size: number} | null> {
+  try {
+    // 1. Get file path from Telegram
+    const fileRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json();
+    if (!fileData.ok || !fileData.result?.file_path) return null;
+
+    const filePath = fileData.result.file_path;
+    const fileSize = fileData.result.file_size || 0;
+    const fileName = filePath.split("/").pop() || "file";
+    const ext = fileName.split(".").pop() || "bin";
+
+    // Determine mime type
+    const mimeMap: Record<string, string> = {
+      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp",
+      mp3: "audio/mpeg", ogg: "audio/ogg", oga: "audio/ogg", wav: "audio/wav", m4a: "audio/mp4",
+      mp4: "video/mp4", pdf: "application/pdf",
+      doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const mime = mimeMap[ext.toLowerCase()] || "application/octet-stream";
+
+    // 2. Download file from Telegram
+    const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`;
+    const fileResp = await fetch(downloadUrl);
+    if (!fileResp.ok) return null;
+    const blob = await fileResp.blob();
+
+    // 3. Upload to Supabase Storage
+    const storagePath = `${clientId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage
+      .from("chat-files")
+      .upload(storagePath, blob, { contentType: mime, upsert: false });
+
+    if (error) {
+      console.error("Storage upload error:", error);
+      return null;
+    }
+
+    const { data: urlData } = supabase.storage.from("chat-files").getPublicUrl(storagePath);
+    return { url: urlData.publicUrl, name: fileName, mime, size: fileSize };
+  } catch (e) {
+    console.error("downloadTelegramFile error:", e);
+    return null;
+  }
+}
+
 // ─── Get client from chatId ─────────────────────────────────
 async function getClient(chatId: number) {
   const { data } = await supabase
@@ -127,6 +174,129 @@ async function handleTopicMessage(chatId: number, threadId: number, text: string
     unread_count: 0,
     last_message_at: new Date().toISOString(),
   }).eq("id", conv.id);
+}
+
+// Handle photo/document/voice sent in a topic
+async function handleTopicMedia(chatId: number, threadId: number, message: any) {
+  const { data: conv } = await supabase
+    .from("conversations")
+    .select("id, client_id, visitor_id, status")
+    .eq("telegram_topic_id", threadId)
+    .single();
+
+  if (!conv) return;
+  const client = await getClient(chatId);
+  if (!client || client.id !== conv.client_id) return;
+
+  if (conv.status === "closed") {
+    await supabase.from("conversations").update({ status: "active" }).eq("id", conv.id);
+  }
+
+  // Determine file_id
+  let fileId: string | null = null;
+  let caption = message.caption || "";
+
+  if (message.photo && message.photo.length > 0) {
+    fileId = message.photo[message.photo.length - 1].file_id; // largest size
+  } else if (message.document) {
+    fileId = message.document.file_id;
+  } else if (message.voice) {
+    fileId = message.voice.file_id;
+  } else if (message.audio) {
+    fileId = message.audio.file_id;
+  }
+
+  if (!fileId) return;
+
+  const fileData = await downloadTelegramFile(fileId, client.id);
+  if (!fileData) {
+    await send(chatId, "❌ Impossible de télécharger le fichier.", { message_thread_id: threadId });
+    return;
+  }
+
+  const isImage = fileData.mime.startsWith("image/");
+  const isAudio = fileData.mime.startsWith("audio/");
+
+  await supabase.from("messages").insert({
+    conversation_id: conv.id,
+    sender_type: "client",
+    content: caption || (isAudio ? "" : ""),
+    content_type: isImage ? "image" : "file",
+    file_url: fileData.url,
+    file_name: fileData.name,
+    file_size: fileData.size,
+    file_mime_type: fileData.mime,
+    is_read: false,
+  });
+
+  await supabase.from("conversations").update({
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+  }).eq("id", conv.id);
+
+  await send(chatId, "✅ Fichier envoyé au visiteur.", { message_thread_id: threadId });
+}
+
+// Handle photo/document/voice in a reply
+async function handleReplyMedia(chatId: number, replyToMessageId: number, message: any) {
+  // Find conversation from reply
+  const { data: originalMsg } = await supabase
+    .from("messages").select("id, conversation_id")
+    .eq("telegram_message_id", replyToMessageId).single();
+
+  let conversationId = originalMsg?.conversation_id || null;
+
+  if (!conversationId) {
+    const { data: notifLog } = await supabase
+      .from("notifications_log").select("message_id")
+      .eq("telegram_message_id", replyToMessageId).single();
+    if (notifLog?.message_id) {
+      const { data: msg } = await supabase
+        .from("messages").select("conversation_id").eq("id", notifLog.message_id).single();
+      conversationId = msg?.conversation_id || null;
+    }
+  }
+
+  if (!conversationId) { await send(chatId, "⚠️ Conversation non trouvée."); return; }
+
+  const { data: conv } = await supabase.from("conversations").select("id, client_id").eq("id", conversationId).single();
+  if (!conv) return;
+  const { data: client } = await supabase.from("clients").select("id").eq("telegram_chat_id", chatId).eq("id", conv.client_id).single();
+  if (!client) { await send(chatId, "⚠️ Pas accès."); return; }
+
+  let fileId: string | null = null;
+  let caption = message.caption || "";
+
+  if (message.photo?.length > 0) fileId = message.photo[message.photo.length - 1].file_id;
+  else if (message.document) fileId = message.document.file_id;
+  else if (message.voice) fileId = message.voice.file_id;
+  else if (message.audio) fileId = message.audio.file_id;
+
+  if (!fileId) return;
+
+  const fileData = await downloadTelegramFile(fileId, client.id);
+  if (!fileData) { await send(chatId, "❌ Erreur fichier."); return; }
+
+  const isImage = fileData.mime.startsWith("image/");
+
+  await supabase.from("messages").insert({
+    conversation_id: conversationId,
+    sender_type: "client",
+    content: caption,
+    content_type: isImage ? "image" : "file",
+    file_url: fileData.url,
+    file_name: fileData.name,
+    file_size: fileData.size,
+    file_mime_type: fileData.mime,
+    is_read: false,
+  });
+
+  await supabase.from("conversations").update({
+    unread_count: 0,
+    last_message_at: new Date().toISOString(),
+  }).eq("id", conversationId);
+
+  await send(chatId, "✅ Fichier envoyé !");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -456,10 +626,11 @@ serve(async (req) => {
 
     const chatId = message.chat.id;
     const chatType = message.chat.type;
-    const text = (message.text || "").trim();
+    const text = (message.text || message.caption || "").trim();
     const textLower = text.toLowerCase();
     const threadId = message.message_thread_id || null;
     const isTopicMessage = message.is_topic_message || false;
+    const hasMedia = !!(message.photo || message.document || message.voice || message.audio);
 
     // ─── FORUM: message in a visitor topic ──────────
     if (chatType === "supergroup" && isTopicMessage && threadId) {
@@ -477,6 +648,12 @@ serve(async (req) => {
       if (text.toUpperCase().startsWith("IFICHAT-")) {
         await handleLinkCode(chatId, text, chatType);
         return new Response("OK");
+      }
+
+      // Media (photo/doc/voice) → forward to visitor
+      if (hasMedia) {
+        await handleTopicMedia(chatId, threadId, message);
+        return new Response("OK", { status: 200 });
       }
 
       // Regular text → reply to visitor in this topic
@@ -528,7 +705,11 @@ serve(async (req) => {
     }
 
     if (message.reply_to_message) {
-      await handleReply(chatId, message.reply_to_message.message_id, text);
+      if (hasMedia) {
+        await handleReplyMedia(chatId, message.reply_to_message.message_id, message);
+      } else {
+        await handleReply(chatId, message.reply_to_message.message_id, text);
+      }
       return new Response("OK");
     }
 

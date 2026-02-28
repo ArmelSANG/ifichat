@@ -329,6 +329,8 @@ export default function Dashboard() {
       business_hours: widgetConfig.business_hours,
       bottom_offset: widgetConfig.bottom_offset || 20,
       side_offset: widgetConfig.side_offset || 20,
+      logo_url: widgetConfig.logo_url || '',
+      avatar_emoji: widgetConfig.avatar_emoji || '💬',
     };
 
     try {
@@ -377,7 +379,7 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=6" async></script>`;
+  const embedCode = `<script src="${import.meta.env.VITE_APP_URL || 'https://chat.ifiaas.com'}/w/${client?.id}.js?v=7" async></script>`;
 
   // ─── Render Tabs ────────────────────────────────────────
   function renderConversations() {

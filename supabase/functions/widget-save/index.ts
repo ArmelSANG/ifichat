@@ -60,6 +60,12 @@ serve(async (req) => {
       if (config[key] !== undefined) safeConfig[key] = config[key];
     }
 
+    // Core fields that always exist in the table
+    const coreFields = [
+      "business_name", "primary_color", "welcome_message",
+      "placeholder_text", "position", "business_hours", "logo_url",
+    ];
+
     // Upsert: update if exists, insert if not
     const { data: existing } = await supabase
       .from("widget_configs")
@@ -68,10 +74,25 @@ serve(async (req) => {
       .single();
 
     if (existing) {
-      const { error } = await supabase
+      // Try full update first
+      let { error } = await supabase
         .from("widget_configs")
         .update(safeConfig)
         .eq("client_id", clientId);
+
+      // If fail (new columns don't exist yet), fallback to core fields only
+      if (error) {
+        console.warn("Full update failed, trying core fields:", error.message);
+        const coreConfig: Record<string, unknown> = {};
+        for (const key of coreFields) {
+          if (safeConfig[key] !== undefined) coreConfig[key] = safeConfig[key];
+        }
+        const fallback = await supabase
+          .from("widget_configs")
+          .update(coreConfig)
+          .eq("client_id", clientId);
+        error = fallback.error;
+      }
 
       if (error) {
         console.error("Widget update error:", error);
@@ -81,9 +102,22 @@ serve(async (req) => {
         );
       }
     } else {
-      const { error } = await supabase
+      let { error } = await supabase
         .from("widget_configs")
         .insert({ client_id: clientId, ...safeConfig });
+
+      // Fallback to core fields if new columns don't exist
+      if (error) {
+        console.warn("Full insert failed, trying core fields:", error.message);
+        const coreConfig: Record<string, unknown> = {};
+        for (const key of coreFields) {
+          if (safeConfig[key] !== undefined) coreConfig[key] = safeConfig[key];
+        }
+        const fallback = await supabase
+          .from("widget_configs")
+          .insert({ client_id: clientId, ...coreConfig });
+        error = fallback.error;
+      }
 
       if (error) {
         console.error("Widget insert error:", error);

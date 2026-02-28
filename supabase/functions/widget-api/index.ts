@@ -343,6 +343,19 @@ async function sendMessage(body: any, clientId: string) {
     );
   }
 
+  // Update conversation timestamp + increment unread
+  const { data: convData } = await supabase
+    .from("conversations")
+    .select("unread_count")
+    .eq("id", conversationId)
+    .single();
+
+  await supabase.from("conversations").update({
+    last_message_at: new Date().toISOString(),
+    unread_count: (convData?.unread_count || 0) + 1,
+    status: "active",
+  }).eq("id", conversationId);
+
   // Get visitor info
   const { data: visitor } = await supabase
     .from("visitors")
@@ -511,16 +524,17 @@ async function uploadFile(req: Request, clientId: string) {
   }
 
   // Update conversation
-  await supabase
+  const { data: convData } = await supabase
     .from("conversations")
-    .update({ last_message_at: new Date().toISOString(), unread_count: supabase.rpc ? 1 : 1 })
-    .eq("id", conversationId);
+    .select("unread_count")
+    .eq("id", conversationId)
+    .single();
 
-  // Increment unread (raw SQL via update)
-  await supabase.rpc("increment_unread", { conv_id: conversationId }).catch(() => {
-    // Fallback: just set to 1 if rpc doesn't exist
-    supabase.from("conversations").update({ unread_count: 1 }).eq("id", conversationId);
-  });
+  await supabase.from("conversations").update({
+    last_message_at: new Date().toISOString(),
+    unread_count: (convData?.unread_count || 0) + 1,
+    status: "active",
+  }).eq("id", conversationId);
 
   // Notify Telegram
   const { data: visitor } = await supabase

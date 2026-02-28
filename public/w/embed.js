@@ -42,15 +42,17 @@ function injectCSS(){
 '@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");'+
 '#ifi *,#ifi *:before,#ifi *:after{box-sizing:border-box;margin:0;padding:0;font-family:"Inter",system-ui,-apple-system,sans-serif}'+
 
-// FAB
-'#ifi-fab{position:fixed;bottom:'+bot+'px;'+(isL?'left':'right')+':'+sd+'px;width:56px;height:56px;border-radius:50%;background:'+C+';border:none;cursor:pointer;box-shadow:0 4px 16px '+C+'55;z-index:99998;display:flex;align-items:center;justify-content:center;transition:all .3s;animation:_fi .5s cubic-bezier(.34,1.5,.64,1)}'+
-'#ifi-fab:hover{transform:scale(1.08)}'+
+// FAB — premium with pulse ring
+'#ifi-fab{position:fixed;bottom:'+bot+'px;'+(isL?'left':'right')+':'+sd+'px;width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,'+C+','+C+'cc);border:none;cursor:pointer;box-shadow:0 4px 20px '+C+'55;z-index:99998;display:flex;align-items:center;justify-content:center;transition:all .3s;animation:_fi .5s cubic-bezier(.34,1.5,.64,1)}'+
+'#ifi-fab:hover{transform:scale(1.1);box-shadow:0 6px 28px '+C+'77}'+
+'#ifi-fab:before{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid '+C+'44;animation:_ring 2s ease infinite}'+
 '#ifi-fab svg{width:24px;height:24px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:all .3s;position:absolute}'+
 '#ifi-fab .i1{opacity:1;transform:scale(1)}'+
 '#ifi-fab .i2{opacity:0;transform:scale(0) rotate(-90deg)}'+
 '#ifi-fab.on .i1{opacity:0;transform:scale(0) rotate(90deg)}'+
 '#ifi-fab.on .i2{opacity:1;transform:scale(1) rotate(0)}'+
-'#ifi-bdg{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;border-radius:9px;background:#EF4444;color:#fff;font:700 10px/18px "Inter",sans-serif;text-align:center;padding:0 4px;display:none;box-shadow:0 2px 6px rgba(239,68,68,.4)}'+
+'#ifi-fab.on:before{display:none}'+
+'#ifi-bdg{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;border-radius:10px;background:#EF4444;color:#fff;font:700 10px/20px "Inter",sans-serif;text-align:center;padding:0 5px;display:none;box-shadow:0 2px 8px rgba(239,68,68,.5);animation:_bdg .4s cubic-bezier(.34,1.5,.64,1)}'+
 
 // WINDOW
 '#ifi{position:fixed;bottom:'+(bot+64)+'px;'+(isL?'left':'right')+':'+sd+'px;'+
@@ -138,6 +140,8 @@ function injectCSS(){
 
 // ANIMS
 '@keyframes _fi{from{transform:scale(0)}to{transform:scale(1)}}'+
+'@keyframes _ring{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.5);opacity:0}}'+
+'@keyframes _bdg{0%{transform:scale(.5)}50%{transform:scale(1.3)}100%{transform:scale(1)}}'+
 '@keyframes _pl{0%,100%{opacity:1}50%{opacity:.4}}'+
 '@keyframes _mi{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}'+
 '@keyframes _tp{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}'+
